@@ -1,0 +1,331 @@
+/* client/src/components/ChatInterface.css */
+
+/* GLOBAL RESET */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+/* MAIN CONTAINER - Forces the 3 columns side-by-side */
+.chat-container {
+    display: flex;
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+    background-color: #f0f2f5;
+}
+
+/* --- COLUMN 1: BLUE NAV RAIL --- */
+.nav-rail {
+    width: 200px;
+    background-color: #007bff;
+    /* Bright Blue */
+    color: white;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    flex-shrink: 0;
+    /* Prevents shrinking */
+}
+
+.nav-logo {
+    font-size: 1.5rem;
+    font-weight: bold;
+    margin-bottom: 30px;
+}
+
+.nav-spacer {
+    flex: 1;
+    /* Pushes content below to the bottom */
+}
+
+.my-id-display {
+    background-color: rgba(255, 255, 255, 0.1);
+    padding: 10px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    margin-bottom: 15px;
+    word-break: break-all;
+}
+
+.my-id-display strong {
+    display: block;
+    font-size: 1.1rem;
+    margin-top: 5px;
+    letter-spacing: 1px;
+}
+
+.logout-btn {
+    background-color: #ff4d4d;
+    color: white;
+    border: none;
+    padding: 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+    width: 100%;
+    transition: background 0.2s;
+}
+
+.logout-btn:hover {
+    background-color: #e60000;
+}
+
+/* --- COLUMN 2: WHITE CONTACT LIST PANEL --- */
+.contact-list-panel {
+    width: 300px;
+    background-color: white;
+    border-right: 1px solid #ddd;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+/* Add Contact Section (Top of Middle Column) */
+.add-user-section {
+    padding: 20px;
+    border-bottom: 1px solid #eee;
+    background-color: #f8f9fa;
+}
+
+.add-user-section h4 {
+    margin-bottom: 10px;
+    color: #555;
+}
+
+.search-form {
+    display: flex;
+    gap: 8px;
+}
+
+.search-form input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid #ccc;
+    border-radius: 20px;
+    /* Rounded input */
+    outline: none;
+}
+
+.search-form button {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    width: 35px;
+    height: 35px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.search-result {
+    margin-top: 15px;
+    padding: 10px;
+    background-color: #e7f3ff;
+    border-radius: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.9rem;
+}
+
+.add-btn {
+    background-color: #28a745;
+    color: white;
+    border: none;
+    padding: 5px 12px;
+    border-radius: 15px;
+    cursor: pointer;
+    font-size: 0.8rem;
+}
+
+.search-error {
+    color: #dc3545;
+    font-size: 0.8rem;
+    margin-top: 8px;
+}
+
+/* Contacts List Area */
+.conversations-list {
+    flex: 1;
+    overflow-y: auto;
+}
+
+.no-contacts {
+    padding: 20px;
+    text-align: center;
+    color: #aaa;
+    margin-top: 50px;
+}
+
+.contact-item {
+    display: flex;
+    align-items: center;
+    padding: 15px 20px;
+    cursor: pointer;
+    border-bottom: 1px solid #f1f1f1;
+    transition: background 0.2s;
+}
+
+.contact-item:hover {
+    background-color: #f5f5f5;
+}
+
+.contact-item.selected {
+    background-color: #e6f2ff;
+    border-right: 3px solid #007bff;
+}
+
+.avatar-wrapper {
+    position: relative;
+    margin-right: 15px;
+}
+
+.avatar {
+    width: 45px;
+    height: 45px;
+    background-color: #ccc;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: bold;
+    font-size: 1.1rem;
+}
+
+.online-dot {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    width: 12px;
+    height: 12px;
+    background-color: #2ecc71;
+    /* Green */
+    border: 2px solid white;
+    border-radius: 50%;
+}
+
+.contact-name {
+    font-weight: 500;
+    color: #333;
+}
+
+/* --- COLUMN 3: CHAT AREA --- */
+.chat-box {
+    flex: 1;
+    /* Takes remaining width */
+    display: flex;
+    flex-direction: column;
+    background-color: #fff;
+}
+
+.chat-header {
+    padding: 20px;
+    border-bottom: 1px solid #eee;
+    font-size: 1.1rem;
+    background-color: white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+}
+
+.chat-messages {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+    background-color: #f0f2f5;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.no-chat {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ccc;
+    font-size: 1.5rem;
+    background-color: #f0f2f5;
+}
+
+/* Message Bubbles */
+.message-wrapper {
+    display: flex;
+    width: 100%;
+}
+
+.message-wrapper.own {
+    justify-content: flex-end;
+}
+
+.message-wrapper.friend {
+    justify-content: flex-start;
+}
+
+.message-bubble {
+    max-width: 60%;
+    padding: 10px 15px;
+    border-radius: 18px;
+    position: relative;
+    font-size: 0.95rem;
+    line-height: 1.4;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.message-wrapper.own .message-bubble {
+    background-color: #007bff;
+    color: white;
+    border-bottom-right-radius: 2px;
+}
+
+.message-wrapper.friend .message-bubble {
+    background-color: white;
+    color: #333;
+    border-bottom-left-radius: 2px;
+}
+
+.message-time {
+    font-size: 0.7rem;
+    text-align: right;
+    margin-top: 4px;
+    opacity: 0.7;
+}
+
+/* Chat Input Area */
+.chat-input-area {
+    padding: 20px;
+    background-color: white;
+    border-top: 1px solid #eee;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.chat-input-area input {
+    flex: 1;
+    padding: 12px 20px;
+    border: 1px solid #ddd;
+    border-radius: 30px;
+    outline: none;
+    font-size: 1rem;
+    background-color: #f9f9f9;
+}
+
+.send-btn {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    padding: 10px 25px;
+    border-radius: 30px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.send-btn:hover {
+    background-color: #0056b3;
+}
