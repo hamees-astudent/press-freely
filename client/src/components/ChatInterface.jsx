@@ -319,9 +319,44 @@ function ChatInterface({ user, onLogout }) {
     const getMessages = async () => {
       if (currentChat) {
         try {
-          const res = await axios.get(`http://localhost:5000/api/chat/messages?user1=${user.customId}&user2=${currentChat.customId}`);
-          setMessages(res.data);
-        } catch (err) { console.log(err); }
+          const res = await axios.get(
+            `http://localhost:5000/api/chat/messages?user1=${user.customId}&user2=${currentChat.customId}`
+          );
+
+          const rawMessages = res.data;
+
+          // A. Get the Shared Secret for this conversation
+          const secret = await getSecretKey(currentChat.customId);
+
+          // B. Decrypt all messages in parallel
+          const decryptedHistory = await Promise.all(
+            rawMessages.map(async (msg) => {
+              try {
+                // If it is a Text message, decrypt the content
+                if (msg.type === "text") {
+                  // Double check it looks like JSON before trying to decrypt
+                  // (Handles cases where you might have old plain text messages in DB)
+                  if (msg.text.startsWith("{") && msg.text.includes("iv")) {
+                    const decryptedText = await decryptData(msg.text, secret);
+                    return { ...msg, text: decryptedText };
+                  }
+                }
+
+                // If it's Audio, we decrypt it on-the-fly when the user clicks Play
+                // so we just return the message as is (with the encrypted file URL)
+                return msg;
+
+              } catch (err) {
+                console.error("Failed to decrypt message:", err);
+                return { ...msg, text: "⚠️ Decryption Error" };
+              }
+            })
+          );
+
+          setMessages(decryptedHistory);
+        } catch (err) {
+          console.log(err);
+        }
       }
     };
     getMessages();
@@ -424,7 +459,7 @@ function ChatInterface({ user, onLogout }) {
 
       {/* 1. NAV RAIL */}
       <div className="nav-rail">
-        <h2 className="nav-logo">My Chat</h2>
+        <h2 className="nav-logo">Press Freely</h2>
         <div className="nav-spacer"></div>
         <div className="my-id-display">My ID: <br /><strong>{user.customId}</strong></div>
         <button onClick={onLogout} className="logout-btn">Logout</button>
