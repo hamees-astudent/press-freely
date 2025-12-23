@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useEffect, useRef, useState } from "react";
+import SimplePeer from "simple-peer"; // Add this
 import { io } from "socket.io-client";
 import "./ChatInterface.css";
 
@@ -25,6 +26,18 @@ function ChatInterface({ user, onLogout }) {
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+
+  // --- VOIP STATE ---
+  const [callAccepted, setCallAccepted] = useState(false);
+  const [callEnded, setCallEnded] = useState(false);
+  const [receivingCall, setReceivingCall] = useState(false);
+  const [caller, setCaller] = useState("");
+  const [callerSignal, setCallerSignal] = useState(null);
+  const [stream, setStream] = useState(null);
+
+  const myAudio = useRef();
+  const userAudio = useRef();
+  const connectionRef = useRef();
 
   const socket = useRef();
   const scrollRef = useRef();
@@ -55,6 +68,118 @@ function ChatInterface({ user, onLogout }) {
       });
     });
   }, [user]);
+
+  useEffect(() => {
+    // Listen for incoming calls
+    if (socket.current) {
+      socket.current.on("incoming_call", (data) => {
+        setReceivingCall(true);
+        setCaller(data.from);
+        setCallerSignal(data.signal);
+      });
+
+      socket.current.on("call_ended", () => {
+        setCallEnded(true);
+        setCallAccepted(false);
+        setReceivingCall(false);
+        setCaller("");
+        if (connectionRef.current) connectionRef.current.destroy();
+        window.location.reload(); // Clean reset
+      });
+    }
+
+  }, []);
+
+  const callUser = (id) => {
+    navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then((currentStream) => {
+      setStream(currentStream);
+
+      const peer = new SimplePeer({
+        initiator: true,
+        trickle: false,
+        stream: currentStream,
+      });
+
+      peer.on("signal", (data) => {
+        socket.current.emit("call_user", {
+          userToCall: id,
+          signalData: data,
+          fromId: user.customId,
+        });
+      });
+
+      peer.on("stream", (remoteStream) => {
+        if (userAudio.current) userAudio.current.srcObject = remoteStream;
+      });
+
+      // --- ADD THIS BLOCK ---
+      peer.on("close", () => {
+        socket.current.off("call_accepted");
+        setCallEnded(true);
+        setCallAccepted(false);
+        setReceivingCall(false);
+        window.location.reload();
+      });
+
+      peer.on("error", (err) => {
+        console.log("Peer error:", err);
+        window.location.reload();
+      });
+
+      socket.current.on("call_accepted", (signal) => {
+        setCallAccepted(true);
+        peer.signal(signal);
+      });
+
+      connectionRef.current = peer;
+    });
+  };
+
+  const answerCall = () => {
+    setCallAccepted(true);
+
+    navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then((currentStream) => {
+      setStream(currentStream);
+
+      const peer = new SimplePeer({
+        initiator: false,
+        trickle: false,
+        stream: currentStream,
+      });
+
+      peer.on("signal", (data) => {
+        socket.current.emit("answer_call", { signal: data, to: caller });
+      });
+
+      peer.on("stream", (remoteStream) => {
+        if (userAudio.current) userAudio.current.srcObject = remoteStream;
+      });
+
+      peer.signal(callerSignal);
+      connectionRef.current = peer;
+    });
+  };
+
+  const leaveCall = () => {
+    setCallEnded(true);
+
+    // Notify the other user that we are hanging up
+    if (currentChat?.customId || caller) {
+      const targetId = currentChat?.customId || caller;
+      socket.current.emit("end_call", { to: targetId });
+    }
+
+    if (connectionRef.current) connectionRef.current.destroy();
+
+    // Stop local mic/cam
+    if (stream) stream.getTracks().forEach(track => track.stop());
+
+    // Reset UI
+    setCallAccepted(false);
+    setReceivingCall(false);
+    setCaller("");
+    window.location.reload();
+  };
 
   // --- 2. START RECORDING ---
   const startRecording = async () => {
@@ -212,6 +337,26 @@ function ChatInterface({ user, onLogout }) {
 
   return (
     <div className="chat-container">
+      {receivingCall && !callAccepted ? (
+        <div className="call-notification">
+          <h3>Incoming Call from {caller}</h3>
+          <div className="call-actions">
+            <button className="answer-btn" onClick={answerCall}>Answer</button>
+            <button className="reject-btn" onClick={() => setReceivingCall(false)}>Reject</button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Hidden Audio Element for Remote Stream */}
+      <audio ref={userAudio} autoPlay />
+
+      {/* Active Call UI */}
+      {callAccepted && !callEnded ? (
+        <div className="active-call-bar">
+          <span>On Call with <b>{currentChat?.username || caller}</b></span>
+          <button className="end-call-btn" onClick={leaveCall}>End Call</button>
+        </div>
+      ) : null}
 
       {/* 1. NAV RAIL */}
       <div className="nav-rail">
@@ -270,7 +415,16 @@ function ChatInterface({ user, onLogout }) {
       <div className="chat-box">
         {currentChat ? (
           <>
-            <div className="chat-header">To: <b>{currentChat.username}</b></div>
+            <div className="chat-header">
+              <div className="header-info">To: <b>{currentChat.username}</b></div>
+
+              <div className="header-actions">
+                {/* CALL BUTTON */}
+                <button className="call-btn" onClick={() => callUser(currentChat.customId)}>
+                  📞 Call
+                </button>
+              </div>
+            </div>
 
             <div className="chat-messages">
               {messages.map((m, index) => (
