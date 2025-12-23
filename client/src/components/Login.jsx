@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useState } from "react";
+import { exportKey, generateKeyPair } from "../e2e";
 
 function Login({ onLogin }) {
     const [username, setUsername] = useState("");
@@ -8,23 +9,28 @@ function Login({ onLogin }) {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        setError("");
-
         try {
-            // Connect to your Node.js backend
+            // 1. Generate E2E Keys
+            const keyPair = await generateKeyPair();
+
+            // 2. Save Private Key locally (NEVER SEND THIS)
+            const privateJwk = await exportKey(keyPair.privateKey);
+            localStorage.setItem("myPrivateKey", privateJwk);
+
+            // 3. Prepare Public Key to send
+            const publicJwk = await exportKey(keyPair.publicKey);
+
+            // 4. Send to Server
             const res = await axios.post("http://localhost:5000/api/auth/login", {
                 username,
                 passphrase,
+                publicKey: publicJwk
             });
 
-            // If successful, the backend returns the user object with 'customId'
-            console.log("Login Success:", res.data);
-
-            // Pass the user data up to App.js
             onLogin(res.data);
         } catch (err) {
             console.error(err);
-            setError(err.response?.data?.message || "Login failed");
+            setError("Login failed");
         }
     };
 

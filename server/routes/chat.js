@@ -5,7 +5,7 @@ const Message = require("../models/Message");
 // [CHANGED] Search for a specific user by ID
 router.get("/user/:customId", async (req, res) => {
     try {
-        const user = await User.findOne({ customId: req.params.customId }, "customId username isOnline");
+        const user = await User.findOne({ customId: req.params.customId }, "customId username isOnline publicKey");
         if (!user) {
             return res.status(404).json({ message: "User not found" });
         }

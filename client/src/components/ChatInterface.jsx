@@ -2,9 +2,43 @@ import axios from "axios";
 import { useEffect, useRef, useState } from "react";
 import SimplePeer from "simple-peer"; // Add this
 import { io } from "socket.io-client";
+import { decryptData, deriveSecretKey, encryptData, importKey } from "../e2e";
 import "./ChatInterface.css";
 
 function ChatInterface({ user, onLogout }) {
+  const [sharedKeys, setSharedKeys] = useState({}); // Cache derived keys by userId
+
+  // --- HELPER: Get or Derive Secret Key ---
+  const getSecretKey = async (contactId) => {
+    // If we already have the derived key in memory, return it
+    if (sharedKeys[contactId]) return sharedKeys[contactId];
+
+    // 1. Get My Private Key from LocalStorage
+    const myPrivateStr = localStorage.getItem("myPrivateKey");
+    if (!myPrivateStr) return null;
+    const myPrivateKey = await importKey(myPrivateStr, "private");
+
+    // 2. Get Contact's Public Key
+    // (We need to update the search/contact list to include publicKey)
+    // For now, let's assume 'currentChat' or 'conversations' object has 'publicKey'
+    let contactKeyStr = conversations.find(c => c.customId === contactId)?.publicKey;
+
+    // If not in list, fetch it (for search results)
+    if (!contactKeyStr) {
+      const res = await axios.get(`http://localhost:5000/api/chat/user/${contactId}`);
+      contactKeyStr = res.data.publicKey;
+    }
+
+    const contactPublicKey = await importKey(contactKeyStr, "public");
+
+    // 3. Derive Secret
+    const secret = await deriveSecretKey(myPrivateKey, contactPublicKey);
+
+    // Cache it
+    setSharedKeys(prev => ({ ...prev, [contactId]: secret }));
+    return secret;
+  };
+
   // 1. Initialize contacts from LocalStorage instead of empty array
   const [conversations, setConversations] = useState(() => {
     const saved = localStorage.getItem("myContacts");
@@ -47,12 +81,21 @@ function ChatInterface({ user, onLogout }) {
     socket.current = io("ws://localhost:5000");
     socket.current.emit("user_connected", user.customId);
 
-    socket.current.on("receive_message", (data) => {
+    socket.current.on("receive_message", async (data) => {
+      // Decrypt incoming
+      const secret = await getSecretKey(data.senderId);
+
+      let decryptedContent = "";
+      let decryptedFileUrl = data.fileUrl;
+
+      if (data.type === "text") {
+        decryptedContent = await decryptData(data.text, secret);
+      }
+      // Handle Audio Encryption later
+
       setArrivalMessage({
-        senderId: data.senderId,
-        text: data.text,
-        type: data.type,      // <--- New
-        fileUrl: data.fileUrl, // <--- New
+        ...data,
+        text: decryptedContent,
         createdAt: Date.now()
       });
     });
@@ -72,10 +115,15 @@ function ChatInterface({ user, onLogout }) {
   useEffect(() => {
     // Listen for incoming calls
     if (socket.current) {
-      socket.current.on("incoming_call", (data) => {
+      socket.current.on("incoming_call", async (data) => {
+        // DECRYPT SIGNAL
+        const secret = await getSecretKey(data.from);
+        const decryptedSignalStr = await decryptData(data.signal, secret);
+        const signal = JSON.parse(decryptedSignalStr);
+
         setReceivingCall(true);
         setCaller(data.from);
-        setCallerSignal(data.signal);
+        setCallerSignal(signal); // Pass decrypted signal to Peer
       });
 
       socket.current.on("call_ended", () => {
@@ -100,10 +148,14 @@ function ChatInterface({ user, onLogout }) {
         stream: currentStream,
       });
 
-      peer.on("signal", (data) => {
+      peer.on("signal", async (data) => {
+        // ENCRYPT SIGNAL
+        const secret = await getSecretKey(id);
+        const encryptedSignal = await encryptData(JSON.stringify(data), secret);
+
         socket.current.emit("call_user", {
           userToCall: id,
-          signalData: data,
+          signalData: encryptedSignal, // Send Ciphertext
           fromId: user.customId,
         });
       });
@@ -213,48 +265,38 @@ function ChatInterface({ user, onLogout }) {
   };
 
   const handleStopRecording = async () => {
-    // Create Blob from chunks
+    // ... create blob ...
     const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+    const buffer = await audioBlob.arrayBuffer();
 
-    // Create Form Data
+    // 1. Encrypt File Buffer
+    const secret = await getSecretKey(currentChat.customId);
+    const encryptedJson = await encryptData(buffer, secret); // This returns JSON string of {iv, content}
+
+    // 2. Upload Encrypted JSON as a file
+    const encryptedBlob = new Blob([encryptedJson], { type: "application/json" });
     const formData = new FormData();
-    formData.append("audio", audioBlob, "voice-note.webm");
+    formData.append("audio", encryptedBlob, "secret_audio.json"); // Save as .json
 
-    try {
-      // 1. Upload to Server
-      const res = await axios.post("http://localhost:5000/api/upload", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+    // ... upload via axios ...
+    const res = await axios.post("http://localhost:5000/api/upload", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
 
-      const { fileUrl } = res.data;
-
-      // 2. Send Socket Message with URL
-      const msgData = {
-        senderId: user.customId,
-        receiverId: currentChat.customId,
-        text: "", // Empty for audio
-        type: "audio",
-        fileUrl: fileUrl
-      };
-
-      socket.current.emit("send_message", msgData);
-
-      // 3. Update UI
-      setMessages((prev) => [...prev, { ...msgData, createdAt: Date.now() }]);
-
-    } catch (err) {
-      console.error("Upload failed", err);
-    }
+    // 3. Send
+    socket.current.emit("send_message", {
+      senderId: user.customId,
+      receiverId: currentChat.customId,
+      text: "", // Empty for audio
+      type: "audio",
+      fileUrl: res.data.fileUrl // This URL points to the encrypted JSON file
+    });
   };
 
   // --- 4. RENDER MESSAGE (Text vs Audio) ---
   const renderMessageContent = (m) => {
     if (m.type === "audio") {
-      return (
-        <audio controls src={m.fileUrl} className="audio-player">
-          Your browser does not support the audio element.
-        </audio>
-      );
+      return <EncryptedAudioPlayer url={m.fileUrl} senderId={m.senderId} />;
     }
     return <div className="message-text">{m.text}</div>;
   };
@@ -329,10 +371,52 @@ function ChatInterface({ user, onLogout }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!newMessage) return;
-    const msg = { senderId: user.customId, receiverId: currentChat.customId, text: newMessage, type: "text" };
+
+    // Encrypt Text
+    const secret = await getSecretKey(currentChat.customId);
+    const encryptedText = await encryptData(newMessage, secret);
+
+    const msg = {
+      senderId: user.customId,
+      receiverId: currentChat.customId,
+      text: encryptedText, // SEND CIPHERTEXT
+      type: "text"
+    };
+
     socket.current.emit("send_message", msg);
-    setMessages([...messages, { ...msg, createdAt: Date.now() }]);
+
+    // For local display, we show the PLAIN text, but store encrypted in DB
+    // Actually, to simulate real E2E, let's just push the plain text to UI state
+    // but the 'msg' object sent to socket is encrypted.
+    setMessages([...messages, { ...msg, text: newMessage, createdAt: Date.now() }]); // Store plain locally
     setNewMessage("");
+  };
+
+  const EncryptedAudioPlayer = ({ url, senderId }) => {
+    const [audioSrc, setAudioSrc] = useState(null);
+
+    const loadAudio = async () => {
+      try {
+        // 1. Fetch encrypted JSON file
+        const res = await fetch(url);
+        const encryptedJson = await res.text();
+
+        // 2. Decrypt
+        const secret = await getSecretKey(senderId);
+        const decryptedBuffer = await decryptData(encryptedJson, secret, true);
+
+        // 3. Create Blob URL
+        const blob = new Blob([decryptedBuffer], { type: "audio/webm" });
+        setAudioSrc(URL.createObjectURL(blob));
+      } catch (e) { console.error(e); }
+    };
+
+    return (
+      <div>
+        {!audioSrc ? <button onClick={loadAudio}>Decrypt & Play Audio</button>
+          : <audio controls src={audioSrc} />}
+      </div>
+    );
   };
 
   return (

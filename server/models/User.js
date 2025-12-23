@@ -36,7 +36,8 @@ const UserSchema = new mongoose.Schema({
     lastSeen: {
         type: Date,
         default: Date.now
-    }
+    },
+    publicKey: { type: String, required: true },
 }, { timestamps: true });
 
 module.exports = mongoose.model("User", UserSchema);

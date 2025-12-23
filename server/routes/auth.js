@@ -10,7 +10,7 @@ const hashPassphrase = (input) => {
 // LOGIN / REGISTER Route
 router.post("/login", async (req, res) => {
     try {
-        const { username, passphrase } = req.body;
+        const { username, passphrase, publicKey } = req.body;
 
         // Hash the incoming passphrase immediately
         const hashedPass = hashPassphrase(passphrase);
@@ -33,6 +33,7 @@ router.post("/login", async (req, res) => {
             const newUser = new User({
                 username,
                 passphrase: hashedPass, // Store the hash, not the plain text
+                publicKey: publicKey
             });
 
             const savedUser = await newUser.save();
