@@ -337,26 +337,6 @@ function ChatInterface({ user, onLogout }) {
 
   return (
     <div className="chat-container">
-      {receivingCall && !callAccepted ? (
-        <div className="call-notification">
-          <h3>Incoming Call from {caller}</h3>
-          <div className="call-actions">
-            <button className="answer-btn" onClick={answerCall}>Answer</button>
-            <button className="reject-btn" onClick={() => setReceivingCall(false)}>Reject</button>
-          </div>
-        </div>
-      ) : null}
-
-      {/* Hidden Audio Element for Remote Stream */}
-      <audio ref={userAudio} autoPlay />
-
-      {/* Active Call UI */}
-      {callAccepted && !callEnded ? (
-        <div className="active-call-bar">
-          <span>On Call with <b>{currentChat?.username || caller}</b></span>
-          <button className="end-call-btn" onClick={leaveCall}>End Call</button>
-        </div>
-      ) : null}
 
       {/* 1. NAV RAIL */}
       <div className="nav-rail">
@@ -413,6 +393,26 @@ function ChatInterface({ user, onLogout }) {
 
       {/* 3. CHAT AREA (Same as before) */}
       <div className="chat-box">
+        {receivingCall && !callAccepted ? (
+          <div className="call-notification">
+            <h3>Incoming Call from {caller}</h3>
+            <div className="call-actions">
+              <button className="answer-btn" onClick={answerCall}>Answer</button>
+              <button className="reject-btn" onClick={() => setReceivingCall(false)}>Reject</button>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Hidden Audio Element for Remote Stream */}
+        <audio ref={userAudio} autoPlay />
+
+        {/* Active Call UI */}
+        {callAccepted && !callEnded ? (
+          <div className="active-call-bar">
+            <span>On Call with <b>{currentChat?.username || caller}</b></span>
+            <button className="end-call-btn" onClick={leaveCall}>End Call</button>
+          </div>
+        ) : null}
         {currentChat ? (
           <>
             <div className="chat-header">
