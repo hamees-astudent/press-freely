@@ -1,37 +1,54 @@
 const User = require("./models/User");
 const Message = require("./models/Message");
+const jwt = require("jsonwebtoken"); //
 
 // Keep the online users state isolated in this module
 let onlineUsers = {};
 
 module.exports = (io) => {
-  io.on("connection", (socket) => {
-    console.log(`Socket Connected: ${socket.id}`);
+  io.use((socket, next) => {
+    const token = socket.handshake.auth.token;
 
-    // --- 1. User Connects ---
-    socket.on("user_connected", async (userId) => {
-      onlineUsers[userId] = socket.id;
+    if (!token) {
+      return next(new Error("Authentication error: No token provided"));
+    }
 
-      // Update DB status to Online
-      await User.findOneAndUpdate({ customId: userId }, { isOnline: true });
+    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+      if (err) {
+        return next(new Error("Authentication error: " + err.message));
+      }
 
-      // Broadcast to everyone
-      io.emit("update_user_status", { userId, isOnline: true });
+      // Attach the trusted user ID to the socket object
+      socket.user = decoded;
+      next(); // Allow connection
     });
+  });
 
-    // --- 2. Send Message ---
+  io.on("connection", async (socket) => {
+    // We now TRUST socket.user.customId because it came from the token
+    const userId = socket.user.customId;
+
+    console.log(`User Verified & Connected: ${userId}`);
+
+    // Automatically mark as online (No need to wait for 'user_connected' event)
+    onlineUsers[userId] = socket.id;
+    await User.findOneAndUpdate({ customId: userId }, { isOnline: true });
+    io.emit("update_user_status", { userId, isOnline: true });
+
+    // --- SOCKET EVENTS ---
+
+    // (We no longer strictly need 'user_connected', but keeping it won't hurt)
+    socket.on("user_connected", () => { /* Redundant now, but harmless */ });
+
     socket.on("send_message", async (data) => {
-      const { senderId, receiverId, text } = data;
+      // Security Check: Ensure the sender is actually the person connected
+      if (data.senderId !== userId) return;
 
-      // Save message to DB
       const newMessage = new Message(data);
       await newMessage.save();
 
-      // Check if receiver is online
-      const receiverSocketId = onlineUsers[receiverId];
-
+      const receiverSocketId = onlineUsers[data.receiverId];
       if (receiverSocketId) {
-        // Send directly to that specific user
         io.to(receiverSocketId).emit("receive_message", data);
       }
     });
@@ -40,33 +57,23 @@ module.exports = (io) => {
     socket.on("typing", ({ receiverId, senderId, isTyping }) => {
       const receiverSocketId = onlineUsers[receiverId];
       if (receiverSocketId) {
-        io.to(receiverSocketId).emit("display_typing", { senderId, isTyping });
+        io.to(receiverSocketId).emit("display_typing", { userId, isTyping });
       }
     });
 
-    // --- 4. Disconnect ---
+    // Disconnect
     socket.on("disconnect", async () => {
-      // Find the userId associated with this socket
-      const userId = Object.keys(onlineUsers).find(key => onlineUsers[key] === socket.id);
-
-      if (userId) {
-        delete onlineUsers[userId];
-
-        // Update DB
-        await User.findOneAndUpdate({ customId: userId }, { isOnline: false, lastSeen: Date.now() });
-
-        // Broadcast offline status
-        io.emit("update_user_status", { userId, isOnline: false });
-      }
+      delete onlineUsers[userId];
+      await User.findOneAndUpdate({ customId: userId }, { isOnline: false, lastSeen: Date.now() });
+      io.emit("update_user_status", { userId, isOnline: false });
     });
 
-    // Caller starts a call
-    socket.on("call_user", ({ userToCall, signalData, fromId }) => {
+    socket.on("call_user", ({ userToCall, signalData }) => {
       const receiverSocketId = onlineUsers[userToCall];
       if (receiverSocketId) {
         io.to(receiverSocketId).emit("incoming_call", {
           signal: signalData,
-          from: fromId
+          from: userId // Trust the token, not the client payload
         });
       }
     });

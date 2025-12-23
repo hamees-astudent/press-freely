@@ -78,7 +78,18 @@ function ChatInterface({ user, onLogout }) {
 
   // --- Socket Logic (Same as before) ---
   useEffect(() => {
-    socket.current = io("ws://localhost:5000");
+    console.log(user);
+    socket.current = io("ws://localhost:5000", {
+      auth: {
+        token: user.token // <--- IMPORTANT
+      }
+    });
+
+    socket.current.on("connect_error", (err) => {
+      console.log("Socket Auth Error:", err.message);
+      onLogout(); // Force logout so they can login again to get a new token
+    });
+
     socket.current.emit("user_connected", user.customId);
 
     socket.current.on("receive_message", async (data) => {

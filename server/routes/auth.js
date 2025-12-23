@@ -1,6 +1,9 @@
 const router = require("express").Router();
 const User = require("../models/User");
 const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
+
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // Helper function: Hash string to SHA-256 Hex
 const hashPassphrase = (input) => {
@@ -16,7 +19,15 @@ router.post("/login", async (req, res) => {
         const hashedPass = hashPassphrase(passphrase);
 
         // Check if user already exists
-        const user = await User.findOne({ username });
+        let user = await User.findOne({ username });
+
+        // --- GENERATE TOKEN ---
+        // This token proves identity and cannot be forged
+        const token = jwt.sign(
+            { customId: user.customId, username: user.username },
+            JWT_SECRET,
+            { expiresIn: "7d" }
+        );
 
         if (user) {
             // --- LOGIN LOGIC ---
@@ -24,8 +35,6 @@ router.post("/login", async (req, res) => {
             if (user.passphrase !== hashedPass) {
                 return res.status(400).json({ message: "Incorrect passphrase!" });
             }
-
-            return res.status(200).json(user);
 
         } else {
             // --- REGISTER LOGIC ---
@@ -36,10 +45,14 @@ router.post("/login", async (req, res) => {
                 publicKey: publicKey
             });
 
-            const savedUser = await newUser.save();
-            return res.status(200).json(savedUser);
+            user = await newUser.save();
         }
 
+        let userData = user.toObject();
+        delete userData.passphrase; // Remove passphrase from response
+
+        userData.token = token;
+        return res.status(200).json(userData);
     } catch (err) {
         console.error(err);
         res.status(500).json(err);
