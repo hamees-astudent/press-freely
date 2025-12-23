@@ -72,7 +72,7 @@ A modern, real-time chat application built with React and Node.js, featuring ins
 1. **Clone the repository**
    ```bash
    git clone https://github.com/hamees-astudent/press-freely.git
-   cd DataCommunicationAndNetworkingII
+   cd press-freely
    ```
 
 2. **Install server dependencies**
