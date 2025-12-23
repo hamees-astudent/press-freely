@@ -4,6 +4,7 @@ const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
 const socketHandler = require("./socketHandler");
+const path = require("path");
 require("dotenv").config();
 
 const app = express();
@@ -13,8 +14,11 @@ const server = http.createServer(app); // Create HTTP server for Socket.io
 app.use(cors());
 app.use(express.json());
 
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/chat", require("./routes/chat"));
+app.use("/api/upload", require("./routes/upload"));
 
 // Database Connection
 mongoose.connect(process.env.MONGO_URI || "mongodb://localhost:27017/chat-app", {})

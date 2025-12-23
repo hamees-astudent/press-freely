@@ -1,22 +1,19 @@
 const mongoose = require("mongoose");
 
 const MessageSchema = new mongoose.Schema({
-    senderId: {
-        type: String, // Refers to the customId, not the Mongo _id
-        required: true
-    },
-    receiverId: {
-        type: String, // Refers to the customId
-        required: true
-    },
-    text: {
+    senderId: { type: String, required: true },
+    receiverId: { type: String, required: true },
+    text: { type: String }, // Optional now, since it might be audio
+
+    // New Fields for Audio
+    type: {
         type: String,
-        required: true
+        enum: ["text", "audio"],
+        default: "text"
     },
-    isRead: {
-        type: Boolean,
-        default: false
-    }
-}, { timestamps: true }); // Automatically adds createdAt (timestamp)
+    fileUrl: { type: String }, // Path to the audio file
+
+    isRead: { type: Boolean, default: false }
+}, { timestamps: true });
 
 module.exports = mongoose.model("Message", MessageSchema);
