@@ -145,9 +145,85 @@ A modern, real-time chat application built with React and Node.js, featuring ins
 
 ## 🔐 Security Features
 
+### Authentication & Authorization
+- **JWT Authentication**: Secure token-based authentication with 7-day expiration
 - **Password Hashing**: All passphrases are hashed using SHA-256 before storage
-- **No Plain Text Storage**: Passwords are never stored in plain text
-- **Custom User IDs**: Auto-generated IDs prevent username enumeration
+- **Socket Authentication**: WebSocket connections require valid JWT tokens
+- **Authorization Checks**: Users can only access their own messages
+- **No Plain Text Storage**: Passwords are never stored or transmitted in plain text
+
+### Input Validation & Sanitization
+- **Express Validator**: Server-side validation for all user inputs
+- **DOMPurify**: Client-side XSS protection and HTML sanitization
+- **MongoDB Injection Protection**: Query sanitization to prevent NoSQL injection
+- **Parameter Pollution Prevention**: HTTP parameter pollution protection (HPP)
+
+### Rate Limiting & DDoS Protection
+- **API Rate Limiting**: 100 requests per 15 minutes per IP
+- **Auth Rate Limiting**: 5 login attempts per 15 minutes per IP
+- **Socket Event Rate Limiting**: 10 events per second per user
+- **Message Size Limits**: 10,000 characters max per message
+- **File Upload Limits**: 10MB max file size
+
+### Security Headers
+- **Helmet Integration**: Comprehensive security headers
+- **Content Security Policy (CSP)**: Prevents XSS and injection attacks
+- **X-Content-Type-Options**: Prevents MIME type sniffing
+- **Cross-Origin Resource Policy**: Controls resource sharing
+- **Strict CORS Configuration**: Only allows specified origins
+
+### File Upload Security
+- **Type Validation**: Only audio and JSON files allowed
+- **Size Restrictions**: 10MB maximum file size
+- **Secure Filenames**: Cryptographically random filenames
+- **Extension Validation**: Validates file extensions
+
+### End-to-End Encryption (E2EE)
+- **ECDH Key Exchange**: P-256 curve for key derivation
+- **AES-GCM Encryption**: 256-bit encryption for messages
+- **Client-Side Encryption**: Messages encrypted before transmission
+- **Secure Key Storage**: Private keys never leave the client
+
+### Error Handling & Monitoring
+- **Production Error Handling**: Sanitized error messages in production
+- **Process-Level Handlers**: Graceful shutdown on critical errors
+- **Input Validation Errors**: Detailed validation error responses
+- **Audit Logging**: Security events logged for monitoring
+
+### Custom User IDs
+- **Auto-generated IDs**: Prevents username enumeration attacks
+- **Numeric IDs**: Random 12-digit unique identifiers
+
+---
+
+## 🛡️ Security Documentation
+
+For detailed security information, see:
+- **[SECURITY_AUDIT.md](./SECURITY_AUDIT.md)** - Complete security audit and patches applied
+- **[SECURITY_GUIDE.md](./SECURITY_GUIDE.md)** - Security configuration and testing guide
+
+### Running Security Audits
+
+```bash
+# Check for dependency vulnerabilities
+cd server && npm run audit
+cd client && npm run audit
+
+# Fix non-breaking vulnerabilities
+cd server && npm run audit:fix
+cd client && npm run audit:fix
+```
+
+### Security Best Practices for Production
+
+1. **Change JWT_SECRET** to a strong, random value (32+ characters)
+2. **Enable HTTPS** with valid SSL/TLS certificates
+3. **Configure MongoDB Authentication** and restrict network access
+4. **Set NODE_ENV=production** to enable production security features
+5. **Regular Security Updates** - Keep all dependencies up to date
+6. **Implement Logging & Monitoring** for security events
+7. **Regular Backups** of database and user data
+8. **Penetration Testing** before production deployment
 - **CORS Protection**: Configured to accept requests only from specified origins
 
 ## 🗄️ Database Schema

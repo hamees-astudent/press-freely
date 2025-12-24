@@ -1,15 +1,40 @@
 import axios from "axios";
 import { useState } from "react";
 import { exportKey, generateKeyPair } from "../e2e";
+import { sanitizeUsername } from "../utils/sanitize";
+
+// API configuration
+const API_URL = process.env.REACT_APP_API_URL || "http://localhost:5000";
+axios.defaults.baseURL = API_URL;
 
 function Login({ onLogin }) {
     const [username, setUsername] = useState("");
     const [passphrase, setPassphrase] = useState("");
     const [error, setError] = useState("");
+    const [isLoading, setIsLoading] = useState(false);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        setError("");
+        setIsLoading(true);
+
         try {
+            // Sanitize username
+            const sanitizedUsername = sanitizeUsername(username.trim());
+
+            // Input validation
+            if (sanitizedUsername.length < 3 || sanitizedUsername.length > 30) {
+                throw new Error("Username must be between 3 and 30 characters");
+            }
+
+            if (passphrase.length < 8) {
+                throw new Error("Passphrase must be at least 8 characters");
+            }
+
+            if (!/^[a-zA-Z0-9_-]+$/.test(sanitizedUsername)) {
+                throw new Error("Username can only contain letters, numbers, underscores and hyphens");
+            }
+
             // 1. Generate E2E Keys
             const keyPair = await generateKeyPair();
 
@@ -21,8 +46,8 @@ function Login({ onLogin }) {
             const publicJwk = await exportKey(keyPair.publicKey);
 
             // 4. Send to Server
-            const res = await axios.post("http://localhost:5000/api/auth/login", {
-                username,
+            const res = await axios.post("/api/auth/login", {
+                username: sanitizedUsername,
                 passphrase,
                 publicKey: publicJwk
             });
@@ -30,7 +55,9 @@ function Login({ onLogin }) {
             onLogin(res.data);
         } catch (err) {
             console.error(err);
-            setError("Login failed");
+            setError(err.response?.data?.message || err.message || "Login failed");
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -55,7 +82,9 @@ function Login({ onLogin }) {
                         style={styles.input}
                         required
                     />
-                    <button type="submit" style={styles.button}>Enter Chat</button>
+                    <button type="submit" style={styles.button} disabled={isLoading}>
+                        {isLoading ? "Logging in..." : "Enter Chat"}
+                    </button>
                 </form>
                 {error && <p style={styles.error}>{error}</p>}
             </div>

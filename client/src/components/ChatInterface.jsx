@@ -3,10 +3,25 @@ import { useEffect, useRef, useState } from "react";
 import SimplePeer from "simple-peer"; // Add this
 import { io } from "socket.io-client";
 import { decryptData, deriveSecretKey, encryptData, importKey } from "../e2e";
+import { sanitizeText } from "../utils/sanitize";
 import "./ChatInterface.css";
+
+// API configuration
+const API_URL = process.env.REACT_APP_API_URL || "http://localhost:5000";
+const WS_URL = process.env.REACT_APP_WS_URL || "ws://localhost:5000";
+
+// Configure axios defaults
+axios.defaults.baseURL = API_URL;
 
 function ChatInterface({ user, onLogout }) {
   const [sharedKeys, setSharedKeys] = useState({}); // Cache derived keys by userId
+
+  // Set authorization header for all requests
+  useEffect(() => {
+    if (user?.token) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${user.token}`;
+    }
+  }, [user]);
 
   // --- HELPER: Get or Derive Secret Key ---
   const getSecretKey = async (contactId) => {
@@ -25,7 +40,7 @@ function ChatInterface({ user, onLogout }) {
 
     // If not in list, fetch it (for search results)
     if (!contactKeyStr) {
-      const res = await axios.get(`http://localhost:5000/api/chat/user/${contactId}`);
+      const res = await axios.get(`/api/chat/user/${contactId}`);
       contactKeyStr = res.data.publicKey;
     }
 
@@ -56,6 +71,7 @@ function ChatInterface({ user, onLogout }) {
   const [newMessage, setNewMessage] = useState("");
   const [arrivalMessage, setArrivalMessage] = useState(null);
   const [typingUser, setTypingUser] = useState(null);
+  const [error, setError] = useState(null);
 
   // Search State
   const [searchId, setSearchId] = useState("");
@@ -85,7 +101,7 @@ function ChatInterface({ user, onLogout }) {
   // --- Socket Logic (Same as before) ---
   useEffect(() => {
     console.log(user);
-    socket.current = io("ws://localhost:5000", {
+    socket.current = io(WS_URL, {
       auth: {
         token: user.token // <--- IMPORTANT
       }
@@ -283,7 +299,7 @@ function ChatInterface({ user, onLogout }) {
     formData.append("audio", encryptedBlob, "secret_audio.json"); // Save as .json
 
     // ... upload via axios ...
-    const res = await axios.post("http://localhost:5000/api/upload", formData, {
+    const res = await axios.post("/api/upload", formData, {
       headers: { "Content-Type": "multipart/form-data" },
     });
 
@@ -302,7 +318,9 @@ function ChatInterface({ user, onLogout }) {
     if (m.type === "audio") {
       return <EncryptedAudioPlayer url={m.fileUrl} senderId={m.senderId} />;
     }
-    return <div className="message-text">{m.text}</div>;
+    // Sanitize text before rendering to prevent XSS
+    const safeText = sanitizeText(m.text);
+    return <div className="message-text">{safeText}</div>;
   };
 
   // --- New Message Handling ---
@@ -324,7 +342,7 @@ function ChatInterface({ user, onLogout }) {
       if (currentChat) {
         try {
           const res = await axios.get(
-            `http://localhost:5000/api/chat/messages?user1=${user.customId}&user2=${currentChat.customId}`
+            `/api/chat/messages?user1=${user.customId}&user2=${currentChat.customId}`
           );
 
           const rawMessages = res.data;
@@ -397,7 +415,7 @@ function ChatInterface({ user, onLogout }) {
     }
 
     try {
-      const res = await axios.get(`http://localhost:5000/api/chat/user/${searchId}`);
+      const res = await axios.get(`/api/chat/user/${searchId}`);
       setSearchResult(res.data);
     } catch (err) {
       setSearchError("User not found.");
@@ -460,7 +478,15 @@ function ChatInterface({ user, onLogout }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!newMessage) return;
+    if (!newMessage || !newMessage.trim()) return;
+
+    // Sanitize and limit message length
+    const sanitizedMessage = sanitizeText(newMessage.trim()).substring(0, 10000);
+
+    if (!sanitizedMessage) {
+      setError("Invalid message content");
+      return;
+    }
 
     try {
       // Encrypt Text
@@ -472,7 +498,7 @@ function ChatInterface({ user, onLogout }) {
         return;
       }
 
-      const encryptedText = await encryptData(newMessage, secret);
+      const encryptedText = await encryptData(sanitizedMessage, secret);
 
       const msg = {
         senderId: user.customId,
@@ -486,7 +512,7 @@ function ChatInterface({ user, onLogout }) {
       // For local display, we show the PLAIN text, but store encrypted in DB
       // Actually, to simulate real E2E, let's just push the plain text to UI state
       // but the 'msg' object sent to socket is encrypted.
-      setMessages([...messages, { ...msg, text: newMessage, createdAt: Date.now() }]); // Store plain locally
+      setMessages([...messages, { ...msg, text: sanitizedMessage, createdAt: Date.now() }]); // Store plain locally
       setNewMessage("");
     } catch (err) {
       console.error("Failed to send message:", err);
