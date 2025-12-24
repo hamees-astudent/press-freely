@@ -29,6 +29,12 @@ function ChatInterface({ user, onLogout }) {
       contactKeyStr = res.data.publicKey;
     }
 
+    // Make sure we have the public key before trying to import
+    if (!contactKeyStr) {
+      console.error(`Could not find public key for user ${contactId}`);
+      return null;
+    }
+
     const contactPublicKey = await importKey(contactKeyStr, "public");
 
     // 3. Derive Secret
@@ -92,24 +98,7 @@ function ChatInterface({ user, onLogout }) {
 
     socket.current.emit("user_connected", user.customId);
 
-    socket.current.on("receive_message", async (data) => {
-      // Decrypt incoming
-      const secret = await getSecretKey(data.senderId);
-
-      let decryptedContent = "";
-      let decryptedFileUrl = data.fileUrl;
-
-      if (data.type === "text") {
-        decryptedContent = await decryptData(data.text, secret);
-      }
-      // Handle Audio Encryption later
-
-      setArrivalMessage({
-        ...data,
-        text: decryptedContent,
-        createdAt: Date.now()
-      });
-    });
+    socket.current.on("receive_message", handleReceiveMessage);
 
     socket.current.on("display_typing", (data) => setTypingUser(data.isTyping ? data.senderId : null));
 
@@ -121,6 +110,10 @@ function ChatInterface({ user, onLogout }) {
         return updated;
       });
     });
+
+    return () => {
+      socket.current.off("receive_message", handleReceiveMessage);
+    };
   }, [user]);
 
   useEffect(() => {
@@ -339,6 +332,15 @@ function ChatInterface({ user, onLogout }) {
           // A. Get the Shared Secret for this conversation
           const secret = await getSecretKey(currentChat.customId);
 
+          if (!secret) {
+            console.error("Could not derive shared secret for chat history");
+            setMessages(rawMessages.map(msg => ({
+              ...msg,
+              text: msg.type === "text" ? "⚠️ Unable to decrypt (missing key)" : msg.text
+            })));
+            return;
+          }
+
           // B. Decrypt all messages in parallel
           const decryptedHistory = await Promise.all(
             rawMessages.map(async (msg) => {
@@ -414,32 +416,87 @@ function ChatInterface({ user, onLogout }) {
     }
   };
 
+  const handleReceiveMessage = async (data) => {
+    try {
+      // 1. Get the shared secret
+      const secret = await getSecretKey(data.senderId);
+
+      if (!secret) {
+        console.error("Could not derive shared secret for sender:", data.senderId);
+        // Still set the message but mark it as undecryptable
+        setArrivalMessage({
+          ...data,
+          text: "⚠️ Unable to decrypt message (contact not found)",
+          createdAt: Date.now()
+        });
+        return;
+      }
+
+      let decryptedContent = "";
+
+      // 2. Decrypt if it's text
+      if (data.type === "text") {
+        decryptedContent = await decryptData(data.text, secret);
+      } else {
+        // For Audio/File, the URL is passed through, decryption happens on click
+        decryptedContent = data.text || "";
+      }
+
+      // 3. Update State
+      setArrivalMessage({
+        ...data,
+        text: decryptedContent,
+        createdAt: Date.now()
+      });
+    } catch (err) {
+      console.error("Decryption error:", err);
+      setArrivalMessage({
+        ...data,
+        text: "⚠️ Decryption failed",
+        createdAt: Date.now()
+      });
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!newMessage) return;
 
-    // Encrypt Text
-    const secret = await getSecretKey(currentChat.customId);
-    const encryptedText = await encryptData(newMessage, secret);
+    try {
+      // Encrypt Text
+      const secret = await getSecretKey(currentChat.customId);
 
-    const msg = {
-      senderId: user.customId,
-      receiverId: currentChat.customId,
-      text: encryptedText, // SEND CIPHERTEXT
-      type: "text"
-    };
+      if (!secret) {
+        console.error("Cannot send message: Unable to derive shared secret");
+        alert("Unable to encrypt message. Please try again.");
+        return;
+      }
 
-    socket.current.emit("send_message", msg);
+      const encryptedText = await encryptData(newMessage, secret);
 
-    // For local display, we show the PLAIN text, but store encrypted in DB
-    // Actually, to simulate real E2E, let's just push the plain text to UI state
-    // but the 'msg' object sent to socket is encrypted.
-    setMessages([...messages, { ...msg, text: newMessage, createdAt: Date.now() }]); // Store plain locally
-    setNewMessage("");
+      const msg = {
+        senderId: user.customId,
+        receiverId: currentChat.customId,
+        text: encryptedText, // SEND CIPHERTEXT
+        type: "text"
+      };
+
+      socket.current.emit("send_message", msg);
+
+      // For local display, we show the PLAIN text, but store encrypted in DB
+      // Actually, to simulate real E2E, let's just push the plain text to UI state
+      // but the 'msg' object sent to socket is encrypted.
+      setMessages([...messages, { ...msg, text: newMessage, createdAt: Date.now() }]); // Store plain locally
+      setNewMessage("");
+    } catch (err) {
+      console.error("Failed to send message:", err);
+      alert("Failed to send message. Please try again.");
+    }
   };
 
   const EncryptedAudioPlayer = ({ url, senderId }) => {
     const [audioSrc, setAudioSrc] = useState(null);
+    const [error, setError] = useState(null);
 
     const loadAudio = async () => {
       try {
@@ -449,18 +506,32 @@ function ChatInterface({ user, onLogout }) {
 
         // 2. Decrypt
         const secret = await getSecretKey(senderId);
+
+        if (!secret) {
+          setError("Unable to decrypt audio (missing key)");
+          return;
+        }
+
         const decryptedBuffer = await decryptData(encryptedJson, secret, true);
 
         // 3. Create Blob URL
         const blob = new Blob([decryptedBuffer], { type: "audio/webm" });
         setAudioSrc(URL.createObjectURL(blob));
-      } catch (e) { console.error(e); }
+      } catch (e) {
+        console.error(e);
+        setError("Failed to decrypt audio");
+      }
     };
 
     return (
       <div>
-        {!audioSrc ? <button onClick={loadAudio}>Decrypt & Play Audio</button>
-          : <audio controls src={audioSrc} />}
+        {error ? (
+          <div style={{ color: "red" }}>⚠️ {error}</div>
+        ) : !audioSrc ? (
+          <button onClick={loadAudio}>Decrypt & Play Audio</button>
+        ) : (
+          <audio controls src={audioSrc} />
+        )}
       </div>
     );
   };

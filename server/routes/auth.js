@@ -36,6 +36,9 @@ router.post("/login", async (req, res) => {
                 return res.status(400).json({ message: "Incorrect passphrase!" });
             }
 
+            user.publicKey = publicKey;
+            await user.save();
+
         } else {
             // --- REGISTER LOGIC ---
             // Create new user with the HASHED passphrase
