@@ -331,10 +331,75 @@
 }
 
 /* Audio Player Style inside Bubble */
+.audio-player-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 100%;
+}
+
+.decrypt-audio-btn {
+    background-color: rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: inherit;
+    padding: 8px 16px;
+    border-radius: 12px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.message-wrapper.own .decrypt-audio-btn {
+    background-color: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.3);
+    color: white;
+}
+
+.message-wrapper.friend .decrypt-audio-btn {
+    background-color: #f0f2f5;
+    border-color: #ddd;
+    color: #333;
+}
+
+.decrypt-audio-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.message-wrapper.own .decrypt-audio-btn:hover {
+    background-color: rgba(255, 255, 255, 0.3);
+}
+
+.message-wrapper.friend .decrypt-audio-btn:hover {
+    background-color: #e4e6eb;
+}
+
 .audio-player {
-    height: 40px;
-    max-width: 250px;
+    width: 100%;
+    max-width: 280px;
+    height: 35px;
     outline: none;
+    border-radius: 20px;
+}
+
+.message-wrapper.own .audio-player {
+    filter: invert(1) hue-rotate(180deg);
+}
+
+.audio-error {
+    font-size: 0.8rem;
+    color: #ff6b6b;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.message-wrapper.own .audio-error {
+    color: #ffe0e0;
 }
 
 /* Mic Button */

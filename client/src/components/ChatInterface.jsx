@@ -523,8 +523,10 @@ function ChatInterface({ user, onLogout }) {
   const EncryptedAudioPlayer = ({ url, senderId }) => {
     const [audioSrc, setAudioSrc] = useState(null);
     const [error, setError] = useState(null);
+    const [loading, setLoading] = useState(false);
 
     const loadAudio = async () => {
+      setLoading(true);
       try {
         // 1. Fetch encrypted JSON file
         const res = await fetch(url);
@@ -546,17 +548,34 @@ function ChatInterface({ user, onLogout }) {
       } catch (e) {
         console.error(e);
         setError("Failed to decrypt audio");
+      } finally {
+        setLoading(false);
       }
     };
 
     return (
-      <div>
+      <div className="audio-player-container">
         {error ? (
-          <div style={{ color: "red" }}>⚠️ {error}</div>
+          <div className="audio-error">
+            <span>⚠️</span>
+            <span>{error}</span>
+          </div>
         ) : !audioSrc ? (
-          <button onClick={loadAudio}>Decrypt & Play Audio</button>
+          <button className="decrypt-audio-btn" onClick={loadAudio} disabled={loading}>
+            {loading ? (
+              <>
+                <span>⏳</span>
+                <span>Decrypting...</span>
+              </>
+            ) : (
+              <>
+                <span>🔓</span>
+                <span>Play Audio</span>
+              </>
+            )}
+          </button>
         ) : (
-          <audio controls src={audioSrc} />
+          <audio className="audio-player" controls src={audioSrc} />
         )}
       </div>
     );

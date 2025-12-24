@@ -46,7 +46,7 @@ REACT_APP_WS_URL=ws://localhost:5000
 - Authorization checks for message access
 
 ### 5. Data Protection
-- MongoDB injection prevention (express-mongo-sanitize)
+- MongoDB injection prevention (express-mongo-sanitize with Express 5.x compatibility)
 - XSS protection (DOMPurify)
 - Parameter pollution prevention (HPP)
 - Password hashing (SHA-256)
@@ -147,3 +147,26 @@ curl -X POST http://localhost:5000/api/auth/login -H "Content-Type: application/
 - [Express Security Best Practices](https://expressjs.com/en/advanced/best-practice-security.html)
 - [React Security](https://reactjs.org/docs/dom-elements.html#dangerouslysetinnerhtml)
 - [Socket.io Security](https://socket.io/docs/v4/server-socket-instance/)
+
+## Technical Notes
+
+### Express 5.x Compatibility
+
+This application uses Express 5.x, which has breaking changes from Express 4.x:
+
+**express-mongo-sanitize Configuration:**
+- Express 5.x made `req.query` a read-only getter property
+- The default configuration of `express-mongo-sanitize` tries to reassign `req.query`, causing errors
+- **Solution:** Use `replaceWith` option to replace dangerous characters instead of reconstructing the object
+
+```javascript
+// server/server.js
+app.use(mongoSanitize({
+    replaceWith: '_',
+    onSanitize: ({ req, key }) => {
+        console.warn(`Sanitized input detected: ${key}`);
+    }
+}));
+```
+
+This maintains security while being compatible with Express 5.x's immutable request properties.

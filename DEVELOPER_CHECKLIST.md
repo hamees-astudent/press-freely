@@ -36,6 +36,7 @@
 
 ### Server-Side
 - [ ] Review `server/server.js` - security middleware configuration
+  - Note: `express-mongo-sanitize` configured with `replaceWith` option for Express 5.x compatibility
 - [ ] Review `server/socketHandler.js` - socket authentication and validation
 - [ ] Review `server/routes/auth.js` - authentication logic
 - [ ] Review `server/routes/chat.js` - authorization checks

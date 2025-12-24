@@ -117,12 +117,16 @@ This document outlines all security vulnerabilities that were identified and pat
 **Fix Applied:**
 - Installed `express-mongo-sanitize` package
 - Added middleware to sanitize user input
+- Configured with `replaceWith: '_'` option for Express 5.x compatibility
 - Prevents $ and . characters in user input
 - Added mongoose schema validation
+- Added logging for sanitization events
 
 **Files Modified:**
 - `server/server.js`
 - `server/package.json`
+
+**Note:** Express 5.x compatibility required using `replaceWith` option instead of direct query modification.
 
 ---
 

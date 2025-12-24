@@ -294,15 +294,59 @@ npm eject          # Eject from Create React App
 ## 📝 Future Enhancements
 
 - [ ] Group chat functionality
-- [ ] File and image sharing
-- [ ] Message encryption (E2E)
+- [ ] File and image sharing (photos, documents)
 - [ ] Push notifications
-- [ ] Voice/video calling
 - [ ] Message deletion and editing
 - [ ] User profiles with avatars
 - [ ] Dark mode theme
 - [ ] Mobile responsive improvements
 - [ ] Read receipts
+- [ ] Message search functionality
+- [ ] Emoji reactions
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+#### "Cannot set property query" error at login
+**Issue:** Express 5.x made `req.query` read-only, causing compatibility issues with `express-mongo-sanitize`.
+
+**Solution:** Already fixed! The `express-mongo-sanitize` is configured with `replaceWith: '_'` option in `server/server.js` for Express 5.x compatibility.
+
+#### Port already in use
+**Issue:** Another process is using port 5000 or 3000.
+
+**Solution:**
+```bash
+# Find and kill the process using the port
+lsof -ti:5000 | xargs kill -9  # For server
+lsof -ti:3000 | xargs kill -9  # For client
+
+# Or change the port in .env files
+```
+
+#### MongoDB connection failed
+**Issue:** MongoDB is not running or connection URI is incorrect.
+
+**Solution:**
+```bash
+# Start MongoDB
+mongod
+
+# Or check your MONGO_URI in server/.env
+```
+
+#### CORS errors
+**Issue:** Frontend and backend origins don't match.
+
+**Solution:** Ensure `FRONTEND_URL` in `server/.env` matches your client URL (default: http://localhost:3000)
+
+#### JWT token errors
+**Issue:** Token expired or JWT_SECRET not set.
+
+**Solution:** 
+- Ensure `JWT_SECRET` is set in `server/.env`
+- Try logging out and logging back in to get a fresh token
 
 ## 🤝 Contributing
 

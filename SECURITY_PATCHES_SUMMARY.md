@@ -16,6 +16,7 @@ This document provides a quick summary of all security patches applied to the Pr
 ### Server Files (11 files)
 1. **server/server.js**
    - Added helmet, rate limiting, mongo-sanitize, HPP
+   - Configured mongo-sanitize for Express 5.x compatibility (replaceWith option)
    - Environment variable validation
    - Enhanced CORS configuration
    - Global error handlers
