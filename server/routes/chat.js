@@ -94,4 +94,37 @@ router.get("/messages", validateMessageQuery, async (req, res) => {
     }
 });
 
+// Update message content (for re-encryption)
+router.put("/messages/:messageId", async (req, res) => {
+    try {
+        const { messageId } = req.params;
+        const { text } = req.body;
+
+        if (!text || typeof text !== 'string') {
+            return res.status(400).json({ message: "Invalid text content" });
+        }
+
+        const message = await Message.findById(messageId);
+        
+        if (!message) {
+            return res.status(404).json({ message: "Message not found" });
+        }
+
+        // Security check: ensure authenticated user is sender or receiver
+        if (req.user.customId !== message.senderId && req.user.customId !== message.receiverId) {
+            return res.status(403).json({ 
+                message: "You can only update your own messages" 
+            });
+        }
+
+        message.text = text;
+        await message.save();
+
+        res.status(200).json({ message: "Message updated successfully" });
+    } catch (err) {
+        console.error("Error updating message:", err);
+        res.status(500).json({ message: "Error updating message" });
+    }
+});
+
 module.exports = router;

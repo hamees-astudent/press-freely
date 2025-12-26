@@ -75,6 +75,147 @@ function ChatInterface({ user, onLogout }) {
     }
   };
 
+  // --- HELPER: Refresh Messages ---
+  const refreshMessages = async (contactId) => {
+    try {
+      const res = await axios.get(
+        `/api/chat/messages?user1=${user.customId}&user2=${contactId}`
+      );
+
+      const rawMessages = res.data;
+      const secret = await getSecretKey(contactId);
+
+      if (!secret) {
+        console.error("Could not derive shared secret for chat history");
+        setMessages(rawMessages.map(msg => ({
+          ...msg,
+          text: msg.type === "text" ? "⚠️ Unable to decrypt (missing key)" : msg.text
+        })));
+        return;
+      }
+
+      const decryptedHistory = await Promise.all(
+        rawMessages.map(async (msg) => {
+          try {
+            if (msg.type === "text") {
+              if (msg.text.startsWith("{") && msg.text.includes("iv")) {
+                const decryptedText = await decryptData(msg.text, secret);
+                return { ...msg, text: decryptedText };
+              }
+            }
+            return msg;
+          } catch (err) {
+            console.error("Failed to decrypt message:", err);
+            return { ...msg, text: "⚠️ Decryption Error" };
+          }
+        })
+      );
+
+      setMessages(decryptedHistory);
+      console.log("Messages refreshed successfully");
+    } catch (err) {
+      console.error("Error refreshing messages:", err);
+    }
+  };
+
+  // --- HELPER: Re-encrypt old messages with new keys ---
+  const reEncryptOldMessages = async (contactId, oldKeys, newSecret) => {
+    try {
+      // Validate we have complete old keys (both public and private with theirPublicKey)
+      if (!oldKeys || !oldKeys.myPrivateKey || !oldKeys.theirPublicKey) {
+        console.log("No complete old keys available - skipping re-encryption (this is normal for first key exchange)");
+        return;
+      }
+
+      // Fetch all messages with this contact
+      const res = await axios.get(
+        `/api/chat/messages?user1=${user.customId}&user2=${contactId}`
+      );
+
+      const oldMessages = res.data;
+      
+      if (oldMessages.length === 0) {
+        console.log("No old messages to re-encrypt");
+        return;
+      }
+
+      console.log(`Found ${oldMessages.length} messages, attempting to re-encrypt...`);
+
+      // Try to derive old secret key
+      let oldSecret = null;
+      try {
+        const oldPrivateKey = await importKey(oldKeys.myPrivateKey, "private");
+        const oldPublicKey = await importKey(oldKeys.theirPublicKey, "public");
+        oldSecret = await deriveSecretKey(oldPrivateKey, oldPublicKey);
+        console.log("Successfully derived old secret key");
+      } catch (err) {
+        console.error("Could not derive old secret key:", err);
+        console.log("Skipping re-encryption - old keys incompatible");
+        return;
+      }
+
+      if (!oldSecret) {
+        console.log("Failed to derive old secret key - skipping re-encryption");
+        return;
+      }
+
+      setKeyExchangeStatus(`Re-encrypting ${oldMessages.length} messages...`);
+
+      // Re-encrypt each text message
+      let reEncryptedCount = 0;
+      let skippedCount = 0;
+      
+      for (const msg of oldMessages) {
+        // Only process text messages that appear to be encrypted
+        if (msg.type === "text" && msg.text && msg.text.includes("iv") && msg.text.includes("content")) {
+          try {
+            // Decrypt with old key
+            const decryptedText = await decryptData(msg.text, oldSecret);
+            
+            // Verify decryption was successful
+            if (!decryptedText || decryptedText.includes("⚠️")) {
+              console.log(`Skipping message ${msg._id} - decryption returned error`);
+              skippedCount++;
+              continue;
+            }
+            
+            // Re-encrypt with new key
+            const reEncryptedText = await encryptData(decryptedText, newSecret);
+            
+            // Update on server
+            await axios.put(`/api/chat/messages/${msg._id}`, {
+              text: reEncryptedText
+            });
+            
+            reEncryptedCount++;
+            console.log(`Re-encrypted message ${msg._id} successfully`);
+          } catch (err) {
+            console.error(`Failed to re-encrypt message ${msg._id}:`, err.message);
+            skippedCount++;
+          }
+        } else {
+          skippedCount++;
+        }
+      }
+
+      console.log(`Re-encryption complete: ${reEncryptedCount} successful, ${skippedCount} skipped`);
+      
+      if (reEncryptedCount > 0) {
+        setKeyExchangeStatus(`Re-encrypted ${reEncryptedCount} messages successfully!`);
+        setTimeout(() => setKeyExchangeStatus(""), 3000);
+        
+        // Refresh messages to show re-encrypted content
+        await refreshMessages(contactId);
+      } else {
+        console.log("No messages were re-encrypted - they may not be encrypted or keys don't match");
+      }
+    } catch (err) {
+      console.error("Error re-encrypting messages:", err);
+      setKeyExchangeStatus("Re-encryption failed");
+      setTimeout(() => setKeyExchangeStatus(""), 3000);
+    }
+  };
+
   // Initialize contacts from LocalStorage
   const [conversations, setConversations] = useState(() => {
     const saved = localStorage.getItem("myContacts");
@@ -130,16 +271,30 @@ function ChatInterface({ user, onLogout }) {
       return;
     }
 
-    // Get our keys for this contact
-    const keys = getContactKeys(fromUserId);
-    if (!keys) {
+    // Get our keys for this contact (before updating)
+    const oldKeys = getContactKeys(fromUserId);
+    if (!oldKeys) {
       console.error("No keys found for contact");
       return;
     }
 
+    // Save a copy of old keys for re-encryption (if they're complete)
+    const keysBeforeUpdate = oldKeys.theirPublicKey ? { ...oldKeys } : null;
+    console.log("Old keys before update:", keysBeforeUpdate ? "complete" : "incomplete");
+
     // Save their public key
-    keys.theirPublicKey = publicKey;
-    saveContactKeys(fromUserId, keys);
+    oldKeys.theirPublicKey = publicKey;
+    saveContactKeys(fromUserId, oldKeys);
+
+    // Clear cached secret key so we derive a fresh one
+    setSharedKeys(prev => {
+      const updated = { ...prev };
+      delete updated[fromUserId];
+      return updated;
+    });
+
+    // Derive new secret key
+    const newSecret = await getSecretKey(fromUserId);
 
     setKeyExchangeStatus(`Key exchange with ${fromUserId} completed!`);
     setTimeout(() => setKeyExchangeStatus(""), 3000);
@@ -160,12 +315,25 @@ function ChatInterface({ user, onLogout }) {
       }
       return prev;
     });
+
+    // Re-encrypt old messages only if we had complete old keys (key rotation scenario)
+    if (newSecret && keysBeforeUpdate) {
+      console.log("Initiating re-encryption (key rotation detected)");
+      reEncryptOldMessages(fromUserId, keysBeforeUpdate, newSecret);
+    } else {
+      console.log("Skipping re-encryption (first key exchange)");
+    }
   };
 
   const acceptKeyExchange = async () => {
     if (!pendingKeyRequest) return;
 
     const { fromUserId, publicKey } = pendingKeyRequest;
+
+    // Get old keys if they exist (for re-encryption)
+    const oldKeys = getContactKeys(fromUserId);
+    const keysBeforeUpdate = (oldKeys && oldKeys.theirPublicKey) ? { ...oldKeys } : null;
+    console.log("Old keys before accepting exchange:", keysBeforeUpdate ? "complete" : "incomplete");
 
     // Generate new key pair for this contact
     const keyPair = await generateKeyPair();
@@ -178,6 +346,16 @@ function ChatInterface({ user, onLogout }) {
       myPublicKey,
       theirPublicKey: publicKey
     });
+
+    // Clear cached secret key so we derive a fresh one
+    setSharedKeys(prev => {
+      const updated = { ...prev };
+      delete updated[fromUserId];
+      return updated;
+    });
+
+    // Derive new secret key
+    const newSecret = await getSecretKey(fromUserId);
 
     // Send response with our public key
     socket.current.emit("respond_key_exchange", {
@@ -206,6 +384,14 @@ function ChatInterface({ user, onLogout }) {
       }
       return prev;
     });
+
+    // Re-encrypt old messages only if we had complete old keys (key rotation scenario)
+    if (newSecret && keysBeforeUpdate) {
+      console.log("Initiating re-encryption (key rotation detected)");
+      reEncryptOldMessages(fromUserId, keysBeforeUpdate, newSecret);
+    } else {
+      console.log("Skipping re-encryption (first key exchange)");
+    }
   };
 
   const rejectKeyExchange = () => {
@@ -231,6 +417,13 @@ function ChatInterface({ user, onLogout }) {
       myPrivateKey,
       myPublicKey,
       theirPublicKey: null
+    });
+
+    // Clear cached secret key
+    setSharedKeys(prev => {
+      const updated = { ...prev };
+      delete updated[contactId];
+      return updated;
     });
 
     // Send request
@@ -551,49 +744,9 @@ function ChatInterface({ user, onLogout }) {
 
   // --- Fetch Chat History ---
   useEffect(() => {
-    const getMessages = async () => {
-      if (currentChat) {
-        try {
-          const res = await axios.get(
-            `/api/chat/messages?user1=${user.customId}&user2=${currentChat.customId}`
-          );
-
-          const rawMessages = res.data;
-          const secret = await getSecretKey(currentChat.customId);
-
-          if (!secret) {
-            console.error("Could not derive shared secret for chat history");
-            setMessages(rawMessages.map(msg => ({
-              ...msg,
-              text: msg.type === "text" ? "⚠️ Unable to decrypt (missing key)" : msg.text
-            })));
-            return;
-          }
-
-          const decryptedHistory = await Promise.all(
-            rawMessages.map(async (msg) => {
-              try {
-                if (msg.type === "text") {
-                  if (msg.text.startsWith("{") && msg.text.includes("iv")) {
-                    const decryptedText = await decryptData(msg.text, secret);
-                    return { ...msg, text: decryptedText };
-                  }
-                }
-                return msg;
-              } catch (err) {
-                console.error("Failed to decrypt message:", err);
-                return { ...msg, text: "⚠️ Decryption Error" };
-              }
-            })
-          );
-
-          setMessages(decryptedHistory);
-        } catch (err) {
-          console.log(err);
-        }
-      }
-    };
-    getMessages();
+    if (currentChat) {
+      refreshMessages(currentChat.customId);
+    }
   }, [currentChat, user]);
 
   useEffect(() => {
