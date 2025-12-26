@@ -71,9 +71,9 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
-// Body parser middleware
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+// Body parser middleware - increased limit for file uploads
+app.use(express.json({ limit: "60mb" }));
+app.use(express.urlencoded({ extended: true, limit: "60mb" }));
 
 // Data sanitization against NoSQL query injection
 // Use replaceWith option for Express 5.x compatibility

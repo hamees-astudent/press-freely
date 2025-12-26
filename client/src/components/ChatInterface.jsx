@@ -30,6 +30,28 @@ function ChatInterface({ user, onLogout }) {
   useEffect(() => {
     if (user?.token) {
       axios.defaults.headers.common['Authorization'] = `Bearer ${user.token}`;
+      
+      // Add response interceptor to handle auth errors
+      const interceptor = axios.interceptors.response.use(
+        (response) => response,
+        (error) => {
+          // Don't logout on upload errors or network errors
+          if (error.response?.status === 401 && !error.config?.url?.includes('/upload')) {
+            console.error("Authentication error:", error);
+            // Only logout if it's not an upload-related error
+            if (!error.config?._isRetry) {
+              localStorage.removeItem("chatUser");
+              window.location.reload();
+            }
+          }
+          return Promise.reject(error);
+        }
+      );
+
+      // Cleanup interceptor on unmount
+      return () => {
+        axios.interceptors.response.eject(interceptor);
+      };
     }
   }, [user]);
 
@@ -645,7 +667,7 @@ function ChatInterface({ user, onLogout }) {
 
     const encryptedBlob = new Blob([encryptedJson], { type: "application/json" });
     const formData = new FormData();
-    formData.append("audio", encryptedBlob, "secret_audio.json");
+    formData.append("file", encryptedBlob, "secret_audio.json");
 
     const res = await axios.post("/api/upload", formData, {
       headers: { "Content-Type": "multipart/form-data" },
@@ -666,16 +688,137 @@ function ChatInterface({ user, onLogout }) {
     setMessages(prev => [...prev, audioMsg]);
   };
 
+  // --- File Upload ---
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Check file size (50MB limit)
+    if (file.size > 50 * 1024 * 1024) {
+      alert("File too large. Maximum size is 50MB.");
+      e.target.value = "";
+      return;
+    }
+
+    // Warn about large files
+    if (file.size > 10 * 1024 * 1024) {
+      const proceed = window.confirm(
+        `This file is ${(file.size / 1024 / 1024).toFixed(2)}MB. Large files may take longer to encrypt and upload. Continue?`
+      );
+      if (!proceed) {
+        e.target.value = "";
+        return;
+      }
+    }
+
+    try {
+      const secret = await getSecretKey(currentChat.customId);
+      if (!secret) {
+        alert("Cannot send file - encryption keys not established");
+        e.target.value = "";
+        return;
+      }
+
+      // Show loading indicator
+      console.log(`Encrypting ${file.name}...`);
+
+      // Read file as ArrayBuffer
+      const buffer = await file.arrayBuffer();
+
+      // Encrypt the file
+      const encryptedJson = await encryptData(buffer, secret);
+
+      console.log(`Uploading encrypted ${file.name}...`);
+
+      // Create encrypted blob
+      const encryptedBlob = new Blob([encryptedJson], { type: "application/json" });
+      const formData = new FormData();
+      formData.append("file", encryptedBlob, `encrypted_${file.name}.json`);
+
+      // Upload encrypted file with longer timeout for large files
+      const res = await axios.post("/api/upload", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 120000, // 2 minutes timeout for large files
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          console.log(`Upload progress: ${percentCompleted}%`);
+        }
+      });
+
+      // Determine file type
+      let messageType = "file";
+      if (file.type.startsWith("image/")) {
+        messageType = "image";
+      } else if (file.type.startsWith("video/")) {
+        messageType = "video";
+      } else if (file.type.startsWith("audio/")) {
+        messageType = "audio";
+      }
+
+      const fileMsg = {
+        senderId: user.customId,
+        receiverId: currentChat.customId,
+        text: "",
+        type: messageType,
+        fileUrl: res.data.fileUrl,
+        fileName: file.name,
+        createdAt: Date.now()
+      };
+
+      socket.current.emit("send_message", fileMsg);
+
+      // Add to local messages immediately
+      setMessages(prev => [...prev, fileMsg]);
+      
+      console.log(`${file.name} sent successfully!`);
+      
+      // Clear the file input
+      e.target.value = "";
+    } catch (err) {
+      console.error("File upload error:", err);
+      
+      // Provide specific error messages
+      let errorMessage = "Failed to upload file. Please try again.";
+      
+      if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
+        errorMessage = "Upload timed out. The file might be too large or your connection is slow.";
+      } else if (err.response?.status === 413) {
+        errorMessage = "File is too large for the server to handle.";
+      } else if (err.response?.status === 400) {
+        errorMessage = err.response.data?.message || "Invalid file type or format.";
+      } else if (!navigator.onLine) {
+        errorMessage = "No internet connection. Please check your network.";
+      }
+      
+      alert(errorMessage);
+      
+      // Clear the file input
+      e.target.value = "";
+    }
+  };
+
   // --- Message Rendering ---
   const renderMessageContent = (m) => {
+    // Determine the contact ID (the other person in the conversation)
+    const contactId = m.senderId === user.customId ? m.receiverId : m.senderId;
+    
     if (m.type === "audio") {
-      return <EncryptedAudioPlayer url={m.fileUrl} senderId={m.senderId} />;
+      return <EncryptedAudioPlayer url={m.fileUrl} contactId={contactId} />;
+    }
+    if (m.type === "image") {
+      return <EncryptedImageViewer url={m.fileUrl} contactId={contactId} />;
+    }
+    if (m.type === "video") {
+      return <EncryptedVideoPlayer url={m.fileUrl} contactId={contactId} />;
+    }
+    if (m.type === "file") {
+      return <EncryptedFileDownload url={m.fileUrl} contactId={contactId} fileName={m.fileName} />;
     }
     const safeText = sanitizeText(m.text);
     return <div className="message-text">{safeText}</div>;
   };
 
-  const EncryptedAudioPlayer = ({ url, senderId }) => {
+  const EncryptedAudioPlayer = ({ url, contactId }) => {
     const [audioSrc, setAudioSrc] = useState(null);
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(false);
@@ -686,7 +829,7 @@ function ChatInterface({ user, onLogout }) {
         const res = await fetch(url);
         const encryptedJson = await res.text();
 
-        const secret = await getSecretKey(senderId);
+        const secret = await getSecretKey(contactId);
 
         if (!secret) {
           setError("Unable to decrypt audio (missing key)");
@@ -728,6 +871,187 @@ function ChatInterface({ user, onLogout }) {
           </button>
         ) : (
           <audio className="audio-player" controls src={audioSrc} />
+        )}
+      </div>
+    );
+  };
+
+  // --- Encrypted Image Viewer ---
+  const EncryptedImageViewer = ({ url, contactId }) => {
+    const [imageSrc, setImageSrc] = useState(null);
+    const [error, setError] = useState(null);
+    const [loading, setLoading] = useState(false);
+
+    const loadImage = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(url);
+        const encryptedJson = await res.text();
+
+        const secret = await getSecretKey(contactId);
+
+        if (!secret) {
+          setError("Unable to decrypt image (missing key)");
+          return;
+        }
+
+        const decryptedBuffer = await decryptData(encryptedJson, secret, true);
+
+        const blob = new Blob([decryptedBuffer], { type: "image/jpeg" });
+        setImageSrc(URL.createObjectURL(blob));
+      } catch (e) {
+        console.error(e);
+        setError("Failed to decrypt image");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    return (
+      <div className="media-container">
+        {error ? (
+          <div className="media-error">
+            <span>⚠️</span>
+            <span>{error}</span>
+          </div>
+        ) : !imageSrc ? (
+          <button className="decrypt-media-btn" onClick={loadImage} disabled={loading}>
+            {loading ? (
+              <>
+                <span>⏳</span>
+                <span>Loading...</span>
+              </>
+            ) : (
+              <>
+                <span>🖼️</span>
+                <span>View Image</span>
+              </>
+            )}
+          </button>
+        ) : (
+          <img className="media-image" src={imageSrc} alt="Encrypted content" />
+        )}
+      </div>
+    );
+  };
+
+  // --- Encrypted Video Player ---
+  const EncryptedVideoPlayer = ({ url, contactId }) => {
+    const [videoSrc, setVideoSrc] = useState(null);
+    const [error, setError] = useState(null);
+    const [loading, setLoading] = useState(false);
+
+    const loadVideo = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(url);
+        const encryptedJson = await res.text();
+
+        const secret = await getSecretKey(contactId);
+
+        if (!secret) {
+          setError("Unable to decrypt video (missing key)");
+          return;
+        }
+
+        const decryptedBuffer = await decryptData(encryptedJson, secret, true);
+
+        const blob = new Blob([decryptedBuffer], { type: "video/mp4" });
+        setVideoSrc(URL.createObjectURL(blob));
+      } catch (e) {
+        console.error(e);
+        setError("Failed to decrypt video");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    return (
+      <div className="media-container">
+        {error ? (
+          <div className="media-error">
+            <span>⚠️</span>
+            <span>{error}</span>
+          </div>
+        ) : !videoSrc ? (
+          <button className="decrypt-media-btn" onClick={loadVideo} disabled={loading}>
+            {loading ? (
+              <>
+                <span>⏳</span>
+                <span>Loading...</span>
+              </>
+            ) : (
+              <>
+                <span>🎥</span>
+                <span>Play Video</span>
+              </>
+            )}
+          </button>
+        ) : (
+          <video className="media-video" controls src={videoSrc} />
+        )}
+      </div>
+    );
+  };
+
+  // --- Encrypted File Download ---
+  const EncryptedFileDownload = ({ url, contactId, fileName }) => {
+    const [error, setError] = useState(null);
+    const [loading, setLoading] = useState(false);
+
+    const downloadFile = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(url);
+        const encryptedJson = await res.text();
+
+        const secret = await getSecretKey(contactId);
+
+        if (!secret) {
+          setError("Unable to decrypt file (missing key)");
+          return;
+        }
+
+        const decryptedBuffer = await decryptData(encryptedJson, secret, true);
+
+        const blob = new Blob([decryptedBuffer]);
+        const downloadUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.download = fileName || 'decrypted_file';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(downloadUrl);
+      } catch (e) {
+        console.error(e);
+        setError("Failed to decrypt file");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    return (
+      <div className="file-container">
+        {error ? (
+          <div className="media-error">
+            <span>⚠️</span>
+            <span>{error}</span>
+          </div>
+        ) : (
+          <button className="decrypt-file-btn" onClick={downloadFile} disabled={loading}>
+            {loading ? (
+              <>
+                <span>⏳</span>
+                <span>Downloading...</span>
+              </>
+            ) : (
+              <>
+                <span>📄</span>
+                <span>{fileName || 'Download File'}</span>
+              </>
+            )}
+          </button>
         )}
       </div>
     );
@@ -1034,6 +1358,22 @@ function ChatInterface({ user, onLogout }) {
             {currentChat.hasKeys ? (
               <div className="chat-input-area">
                 <input
+                  type="file"
+                  id="file-upload"
+                  style={{ display: 'none' }}
+                  onChange={handleFileUpload}
+                  accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar"
+                />
+                <button
+                  className="file-btn"
+                  onClick={() => document.getElementById('file-upload').click()}
+                  type="button"
+                  title="Attach file"
+                >
+                  📎
+                </button>
+
+                <input
                   type="text"
                   placeholder="Type a message..."
                   value={newMessage}
@@ -1045,6 +1385,7 @@ function ChatInterface({ user, onLogout }) {
                   className={`mic-btn ${isRecording ? "recording" : ""}`}
                   onClick={isRecording ? stopRecording : startRecording}
                   type="button"
+                  title="Record audio"
                 >
                   {isRecording ? "⬛" : "🎤"}
                 </button>

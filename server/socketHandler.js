@@ -94,7 +94,7 @@ module.exports = (io) => {
         }
 
         // Validate message type
-        if (!['text', 'audio'].includes(data.type)) {
+        if (!['text', 'audio', 'image', 'video', 'file'].includes(data.type)) {
           return;
         }
 
@@ -103,7 +103,8 @@ module.exports = (io) => {
           return;
         }
 
-        if (data.type === 'audio' && (!data.fileUrl || !data.fileUrl.startsWith(process.env.SERVER_URL || 'http://localhost:5000'))) {
+        if (['audio', 'image', 'video', 'file'].includes(data.type) && 
+            (!data.fileUrl || !data.fileUrl.startsWith(process.env.SERVER_URL || 'http://localhost:5000'))) {
           return;
         }
 
@@ -112,7 +113,8 @@ module.exports = (io) => {
           receiverId: data.receiverId,
           text: data.text || "",
           type: data.type || "text",
-          fileUrl: data.fileUrl || null
+          fileUrl: data.fileUrl || null,
+          fileName: data.fileName || null
         });
         
         await newMessage.save();
@@ -125,6 +127,7 @@ module.exports = (io) => {
             text: data.text,
             type: data.type,
             fileUrl: data.fileUrl,
+            fileName: data.fileName,
             createdAt: newMessage.createdAt
           });
         }
