@@ -42,7 +42,7 @@ router.get("/user/:customId", validateCustomId, async (req, res) => {
             });
         }
 
-        const user = await User.findOne({ customId: req.params.customId }, "customId username isOnline publicKey");
+        const user = await User.findOne({ customId: req.params.customId }, "customId username isOnline");
         
         if (!user) {
             return res.status(404).json({ message: "User not found" });

@@ -163,6 +163,65 @@ module.exports = (io) => {
       }
     });
 
+    // Key Exchange Request
+    socket.on("request_key_exchange", ({ targetUserId, publicKey }) => {
+      try {
+        // Rate limiting check
+        if (!checkRateLimit(userId, 'request_key_exchange')) {
+          socket.emit("error", { message: "Rate limit exceeded" });
+          return;
+        }
+
+        if (!targetUserId || typeof targetUserId !== 'string') {
+          return;
+        }
+
+        if (!publicKey || typeof publicKey !== 'string') {
+          return;
+        }
+
+        const targetSocketId = onlineUsers[targetUserId];
+        if (targetSocketId) {
+          io.to(targetSocketId).emit("key_exchange_request", {
+            fromUserId: userId,
+            publicKey: publicKey
+          });
+        }
+      } catch (err) {
+        console.error("Error handling key exchange request:", err);
+      }
+    });
+
+    // Key Exchange Response
+    socket.on("respond_key_exchange", ({ targetUserId, publicKey, accepted }) => {
+      try {
+        // Rate limiting check
+        if (!checkRateLimit(userId, 'respond_key_exchange')) {
+          socket.emit("error", { message: "Rate limit exceeded" });
+          return;
+        }
+
+        if (!targetUserId || typeof targetUserId !== 'string') {
+          return;
+        }
+
+        if (typeof accepted !== 'boolean') {
+          return;
+        }
+
+        const targetSocketId = onlineUsers[targetUserId];
+        if (targetSocketId) {
+          io.to(targetSocketId).emit("key_exchange_response", {
+            fromUserId: userId,
+            publicKey: publicKey,
+            accepted: accepted
+          });
+        }
+      } catch (err) {
+        console.error("Error handling key exchange response:", err);
+      }
+    });
+
     // Call User
     socket.on("call_user", ({ userToCall, signalData }) => {
       try {

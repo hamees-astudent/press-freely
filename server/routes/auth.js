@@ -25,12 +25,7 @@ const loginValidation = [
         .withMessage('Username can only contain letters, numbers, underscores and hyphens'),
     body('passphrase')
         .isLength({ min: 8, max: 128 })
-        .withMessage('Passphrase must be between 8 and 128 characters'),
-    body('publicKey')
-        .notEmpty()
-        .withMessage('Public key is required')
-        .isJSON()
-        .withMessage('Public key must be valid JSON')
+        .withMessage('Passphrase must be between 8 and 128 characters')
 ];
 
 // LOGIN / REGISTER Route
@@ -45,21 +40,7 @@ router.post("/login", loginValidation, async (req, res) => {
             });
         }
 
-        const { username, passphrase, publicKey } = req.body;
-
-        // Validate publicKey structure
-        try {
-            const pkObj = JSON.parse(publicKey);
-            if (!pkObj.kty || !pkObj.crv || !pkObj.x || !pkObj.y) {
-                return res.status(400).json({ 
-                    message: 'Invalid public key format' 
-                });
-            }
-        } catch (e) {
-            return res.status(400).json({ 
-                message: 'Invalid public key JSON' 
-            });
-        }
+        const { username, passphrase } = req.body;
 
         // Hash the incoming passphrase immediately
         const hashedPass = hashPassphrase(passphrase);
@@ -74,16 +55,12 @@ router.post("/login", loginValidation, async (req, res) => {
                 return res.status(400).json({ message: "Incorrect passphrase!" });
             }
 
-            user.publicKey = publicKey;
-            await user.save();
-
         } else {
             // --- REGISTER LOGIC ---
             // Create new user with the HASHED passphrase
             const newUser = new User({
                 username,
-                passphrase: hashedPass, // Store the hash, not the plain text
-                publicKey: publicKey
+                passphrase: hashedPass // Store the hash, not the plain text
             });
 
             user = await newUser.save();

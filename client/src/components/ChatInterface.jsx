@@ -1,8 +1,8 @@
 import axios from "axios";
 import { useEffect, useRef, useState } from "react";
-import SimplePeer from "simple-peer"; // Add this
+import SimplePeer from "simple-peer";
 import { io } from "socket.io-client";
-import { decryptData, deriveSecretKey, encryptData, importKey } from "../e2e";
+import { decryptData, deriveSecretKey, encryptData, exportKey, generateKeyPair, importKey } from "../e2e";
 import { sanitizeText } from "../utils/sanitize";
 import "./ChatInterface.css";
 
@@ -14,6 +14,16 @@ const WS_URL = process.env.REACT_APP_WS_URL || "ws://localhost:5000";
 axios.defaults.baseURL = API_URL;
 
 function ChatInterface({ user, onLogout }) {
+  // Per-contact key storage structure in localStorage:
+  // "contactKeys": {
+  //   "contactId1": {
+  //     "myPrivateKey": "...",
+  //     "myPublicKey": "...",
+  //     "theirPublicKey": "..."
+  //   },
+  //   "contactId2": { ... }
+  // }
+
   const [sharedKeys, setSharedKeys] = useState({}); // Cache derived keys by userId
 
   // Set authorization header for all requests
@@ -23,44 +33,49 @@ function ChatInterface({ user, onLogout }) {
     }
   }, [user]);
 
+  // --- HELPER: Get Contact Keys from LocalStorage ---
+  const getContactKeys = (contactId) => {
+    const allKeys = JSON.parse(localStorage.getItem("contactKeys") || "{}");
+    return allKeys[contactId] || null;
+  };
+
+  // --- HELPER: Save Contact Keys to LocalStorage ---
+  const saveContactKeys = (contactId, keys) => {
+    const allKeys = JSON.parse(localStorage.getItem("contactKeys") || "{}");
+    allKeys[contactId] = keys;
+    localStorage.setItem("contactKeys", JSON.stringify(allKeys));
+  };
+
   // --- HELPER: Get or Derive Secret Key ---
   const getSecretKey = async (contactId) => {
     // If we already have the derived key in memory, return it
     if (sharedKeys[contactId]) return sharedKeys[contactId];
 
-    // 1. Get My Private Key from LocalStorage
-    const myPrivateStr = localStorage.getItem("myPrivateKey");
-    if (!myPrivateStr) return null;
-    const myPrivateKey = await importKey(myPrivateStr, "private");
-
-    // 2. Get Contact's Public Key
-    // (We need to update the search/contact list to include publicKey)
-    // For now, let's assume 'currentChat' or 'conversations' object has 'publicKey'
-    let contactKeyStr = conversations.find(c => c.customId === contactId)?.publicKey;
-
-    // If not in list, fetch it (for search results)
-    if (!contactKeyStr) {
-      const res = await axios.get(`/api/chat/user/${contactId}`);
-      contactKeyStr = res.data.publicKey;
-    }
-
-    // Make sure we have the public key before trying to import
-    if (!contactKeyStr) {
-      console.error(`Could not find public key for user ${contactId}`);
+    // Get keys for this contact
+    const keys = getContactKeys(contactId);
+    if (!keys || !keys.myPrivateKey || !keys.theirPublicKey) {
+      console.error(`Missing keys for contact ${contactId}`);
       return null;
     }
 
-    const contactPublicKey = await importKey(contactKeyStr, "public");
+    try {
+      // Import keys
+      const myPrivateKey = await importKey(keys.myPrivateKey, "private");
+      const theirPublicKey = await importKey(keys.theirPublicKey, "public");
 
-    // 3. Derive Secret
-    const secret = await deriveSecretKey(myPrivateKey, contactPublicKey);
+      // Derive secret
+      const secret = await deriveSecretKey(myPrivateKey, theirPublicKey);
 
-    // Cache it
-    setSharedKeys(prev => ({ ...prev, [contactId]: secret }));
-    return secret;
+      // Cache it
+      setSharedKeys(prev => ({ ...prev, [contactId]: secret }));
+      return secret;
+    } catch (err) {
+      console.error("Error deriving secret key:", err);
+      return null;
+    }
   };
 
-  // 1. Initialize contacts from LocalStorage instead of empty array
+  // Initialize contacts from LocalStorage
   const [conversations, setConversations] = useState(() => {
     const saved = localStorage.getItem("myContacts");
     return saved ? JSON.parse(saved) : [];
@@ -78,12 +93,16 @@ function ChatInterface({ user, onLogout }) {
   const [searchResult, setSearchResult] = useState(null);
   const [searchError, setSearchError] = useState("");
 
-  // --- NEW STATE FOR AUDIO ---
+  // Key Exchange State
+  const [pendingKeyRequest, setPendingKeyRequest] = useState(null);
+  const [keyExchangeStatus, setKeyExchangeStatus] = useState("");
+
+  // Audio Recording State
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
 
-  // --- VOIP STATE ---
+  // VOIP State
   const [callAccepted, setCallAccepted] = useState(false);
   const [callEnded, setCallEnded] = useState(false);
   const [receivingCall, setReceivingCall] = useState(false);
@@ -98,18 +117,17 @@ function ChatInterface({ user, onLogout }) {
   const socket = useRef();
   const scrollRef = useRef();
 
-  // --- Socket Logic (Same as before) ---
+  // --- Socket Logic ---
   useEffect(() => {
-    console.log(user);
     socket.current = io(WS_URL, {
       auth: {
-        token: user.token // <--- IMPORTANT
+        token: user.token
       }
     });
 
     socket.current.on("connect_error", (err) => {
       console.log("Socket Auth Error:", err.message);
-      onLogout(); // Force logout so they can login again to get a new token
+      onLogout();
     });
 
     socket.current.emit("user_connected", user.customId);
@@ -118,45 +136,166 @@ function ChatInterface({ user, onLogout }) {
 
     socket.current.on("display_typing", (data) => setTypingUser(data.isTyping ? data.senderId : null));
 
-    // Update online status for contacts in our list
+    // Update online status for contacts
     socket.current.on("update_user_status", (data) => {
       setConversations(prev => {
         const updated = prev.map(u => u.customId === data.userId ? { ...u, isOnline: data.isOnline } : u);
-        localStorage.setItem("myContacts", JSON.stringify(updated)); // Sync with local storage
+        localStorage.setItem("myContacts", JSON.stringify(updated));
         return updated;
       });
     });
 
+    // Key Exchange Listeners
+    socket.current.on("key_exchange_request", handleKeyExchangeRequest);
+    socket.current.on("key_exchange_response", handleKeyExchangeResponse);
+
+    // Call listeners
+    socket.current.on("incoming_call", handleIncomingCall);
+    socket.current.on("call_ended", handleCallEnded);
+
     return () => {
       socket.current.off("receive_message", handleReceiveMessage);
+      socket.current.off("key_exchange_request", handleKeyExchangeRequest);
+      socket.current.off("key_exchange_response", handleKeyExchangeResponse);
+      socket.current.off("incoming_call", handleIncomingCall);
+      socket.current.off("call_ended", handleCallEnded);
     };
   }, [user]);
 
-  useEffect(() => {
-    // Listen for incoming calls
-    if (socket.current) {
-      socket.current.on("incoming_call", async (data) => {
-        // DECRYPT SIGNAL
-        const secret = await getSecretKey(data.from);
-        const decryptedSignalStr = await decryptData(data.signal, secret);
-        const signal = JSON.parse(decryptedSignalStr);
+  // --- Key Exchange Handlers ---
+  const handleKeyExchangeRequest = async ({ fromUserId, publicKey }) => {
+    console.log("Received key exchange request from:", fromUserId);
+    setPendingKeyRequest({ fromUserId, publicKey });
+  };
 
-        setReceivingCall(true);
-        setCaller(data.from);
-        setCallerSignal(signal); // Pass decrypted signal to Peer
-      });
-
-      socket.current.on("call_ended", () => {
-        setCallEnded(true);
-        setCallAccepted(false);
-        setReceivingCall(false);
-        setCaller("");
-        if (connectionRef.current) connectionRef.current.destroy();
-        window.location.reload(); // Clean reset
-      });
+  const handleKeyExchangeResponse = async ({ fromUserId, publicKey, accepted }) => {
+    if (!accepted) {
+      setKeyExchangeStatus(`User ${fromUserId} declined key exchange`);
+      setTimeout(() => setKeyExchangeStatus(""), 3000);
+      return;
     }
 
-  }, []);
+    // Get our keys for this contact
+    const keys = getContactKeys(fromUserId);
+    if (!keys) {
+      console.error("No keys found for contact");
+      return;
+    }
+
+    // Save their public key
+    keys.theirPublicKey = publicKey;
+    saveContactKeys(fromUserId, keys);
+
+    setKeyExchangeStatus(`Key exchange with ${fromUserId} completed!`);
+    setTimeout(() => setKeyExchangeStatus(""), 3000);
+
+    // Mark contact as having keys
+    setConversations(prev => {
+      const updated = prev.map(c => 
+        c.customId === fromUserId ? { ...c, hasKeys: true } : c
+      );
+      localStorage.setItem("myContacts", JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const acceptKeyExchange = async () => {
+    if (!pendingKeyRequest) return;
+
+    const { fromUserId, publicKey } = pendingKeyRequest;
+
+    // Generate new key pair for this contact
+    const keyPair = await generateKeyPair();
+    const myPrivateKey = await exportKey(keyPair.privateKey);
+    const myPublicKey = await exportKey(keyPair.publicKey);
+
+    // Save keys
+    saveContactKeys(fromUserId, {
+      myPrivateKey,
+      myPublicKey,
+      theirPublicKey: publicKey
+    });
+
+    // Send response with our public key
+    socket.current.emit("respond_key_exchange", {
+      targetUserId: fromUserId,
+      publicKey: myPublicKey,
+      accepted: true
+    });
+
+    setPendingKeyRequest(null);
+    setKeyExchangeStatus(`Key exchange accepted with ${fromUserId}`);
+    setTimeout(() => setKeyExchangeStatus(""), 3000);
+
+    // Update contact list to show keys are established
+    setConversations(prev => {
+      const updated = prev.map(c => 
+        c.customId === fromUserId ? { ...c, hasKeys: true } : c
+      );
+      localStorage.setItem("myContacts", JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const rejectKeyExchange = () => {
+    if (!pendingKeyRequest) return;
+
+    socket.current.emit("respond_key_exchange", {
+      targetUserId: pendingKeyRequest.fromUserId,
+      publicKey: null,
+      accepted: false
+    });
+
+    setPendingKeyRequest(null);
+  };
+
+  const initiateKeyExchange = async (contactId) => {
+    // Generate new key pair for this contact
+    const keyPair = await generateKeyPair();
+    const myPrivateKey = await exportKey(keyPair.privateKey);
+    const myPublicKey = await exportKey(keyPair.publicKey);
+
+    // Save our keys (without their public key yet)
+    saveContactKeys(contactId, {
+      myPrivateKey,
+      myPublicKey,
+      theirPublicKey: null
+    });
+
+    // Send request
+    socket.current.emit("request_key_exchange", {
+      targetUserId: contactId,
+      publicKey: myPublicKey
+    });
+
+    setKeyExchangeStatus(`Key exchange request sent to ${contactId}`);
+    setTimeout(() => setKeyExchangeStatus(""), 3000);
+  };
+
+  // --- Call Handlers ---
+  const handleIncomingCall = async (data) => {
+    const secret = await getSecretKey(data.from);
+    if (!secret) {
+      console.error("Cannot decrypt call signal - missing keys");
+      return;
+    }
+
+    const decryptedSignalStr = await decryptData(data.signal, secret);
+    const signal = JSON.parse(decryptedSignalStr);
+
+    setReceivingCall(true);
+    setCaller(data.from);
+    setCallerSignal(signal);
+  };
+
+  const handleCallEnded = () => {
+    setCallEnded(true);
+    setCallAccepted(false);
+    setReceivingCall(false);
+    setCaller("");
+    if (connectionRef.current) connectionRef.current.destroy();
+    window.location.reload();
+  };
 
   const callUser = (id) => {
     navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then((currentStream) => {
@@ -169,13 +308,16 @@ function ChatInterface({ user, onLogout }) {
       });
 
       peer.on("signal", async (data) => {
-        // ENCRYPT SIGNAL
         const secret = await getSecretKey(id);
+        if (!secret) {
+          console.error("Cannot encrypt call signal - missing keys");
+          return;
+        }
         const encryptedSignal = await encryptData(JSON.stringify(data), secret);
 
         socket.current.emit("call_user", {
           userToCall: id,
-          signalData: encryptedSignal, // Send Ciphertext
+          signalData: encryptedSignal,
           fromId: user.customId,
         });
       });
@@ -184,7 +326,6 @@ function ChatInterface({ user, onLogout }) {
         if (userAudio.current) userAudio.current.srcObject = remoteStream;
       });
 
-      // --- ADD THIS BLOCK ---
       peer.on("close", () => {
         socket.current.off("call_accepted");
         setCallEnded(true);
@@ -235,25 +376,21 @@ function ChatInterface({ user, onLogout }) {
   const leaveCall = () => {
     setCallEnded(true);
 
-    // Notify the other user that we are hanging up
     if (currentChat?.customId || caller) {
       const targetId = currentChat?.customId || caller;
       socket.current.emit("end_call", { to: targetId });
     }
 
     if (connectionRef.current) connectionRef.current.destroy();
-
-    // Stop local mic/cam
     if (stream) stream.getTracks().forEach(track => track.stop());
 
-    // Reset UI
     setCallAccepted(false);
     setReceivingCall(false);
     setCaller("");
     window.location.reload();
   };
 
-  // --- 2. START RECORDING ---
+  // --- Audio Recording ---
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -276,7 +413,6 @@ function ChatInterface({ user, onLogout }) {
     }
   };
 
-  // --- 3. STOP RECORDING & UPLOAD ---
   const stopRecording = () => {
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current.stop();
@@ -285,239 +421,41 @@ function ChatInterface({ user, onLogout }) {
   };
 
   const handleStopRecording = async () => {
-    // ... create blob ...
     const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
     const buffer = await audioBlob.arrayBuffer();
 
-    // 1. Encrypt File Buffer
     const secret = await getSecretKey(currentChat.customId);
-    const encryptedJson = await encryptData(buffer, secret); // This returns JSON string of {iv, content}
+    if (!secret) {
+      alert("Cannot send audio - encryption keys not established");
+      return;
+    }
 
-    // 2. Upload Encrypted JSON as a file
+    const encryptedJson = await encryptData(buffer, secret);
+
     const encryptedBlob = new Blob([encryptedJson], { type: "application/json" });
     const formData = new FormData();
-    formData.append("audio", encryptedBlob, "secret_audio.json"); // Save as .json
+    formData.append("audio", encryptedBlob, "secret_audio.json");
 
-    // ... upload via axios ...
     const res = await axios.post("/api/upload", formData, {
       headers: { "Content-Type": "multipart/form-data" },
     });
 
-    // 3. Send
     socket.current.emit("send_message", {
       senderId: user.customId,
       receiverId: currentChat.customId,
-      text: "", // Empty for audio
+      text: "",
       type: "audio",
-      fileUrl: res.data.fileUrl // This URL points to the encrypted JSON file
+      fileUrl: res.data.fileUrl
     });
   };
 
-  // --- 4. RENDER MESSAGE (Text vs Audio) ---
+  // --- Message Rendering ---
   const renderMessageContent = (m) => {
     if (m.type === "audio") {
       return <EncryptedAudioPlayer url={m.fileUrl} senderId={m.senderId} />;
     }
-    // Sanitize text before rendering to prevent XSS
     const safeText = sanitizeText(m.text);
     return <div className="message-text">{safeText}</div>;
-  };
-
-  // --- New Message Handling ---
-  useEffect(() => {
-    if (arrivalMessage) {
-      // If message is from current chat, show it
-      if (currentChat && arrivalMessage.senderId === currentChat.customId) {
-        setMessages((prev) => [...prev, arrivalMessage]);
-      }
-
-      // OPTIONAL: If message is from someone NOT in contacts, auto-add them?
-      // For now, we will stick to your "Manual Add" rule.
-    }
-  }, [arrivalMessage, currentChat]);
-
-  // --- Fetch Chat History ---
-  useEffect(() => {
-    const getMessages = async () => {
-      if (currentChat) {
-        try {
-          const res = await axios.get(
-            `/api/chat/messages?user1=${user.customId}&user2=${currentChat.customId}`
-          );
-
-          const rawMessages = res.data;
-
-          // A. Get the Shared Secret for this conversation
-          const secret = await getSecretKey(currentChat.customId);
-
-          if (!secret) {
-            console.error("Could not derive shared secret for chat history");
-            setMessages(rawMessages.map(msg => ({
-              ...msg,
-              text: msg.type === "text" ? "⚠️ Unable to decrypt (missing key)" : msg.text
-            })));
-            return;
-          }
-
-          // B. Decrypt all messages in parallel
-          const decryptedHistory = await Promise.all(
-            rawMessages.map(async (msg) => {
-              try {
-                // If it is a Text message, decrypt the content
-                if (msg.type === "text") {
-                  // Double check it looks like JSON before trying to decrypt
-                  // (Handles cases where you might have old plain text messages in DB)
-                  if (msg.text.startsWith("{") && msg.text.includes("iv")) {
-                    const decryptedText = await decryptData(msg.text, secret);
-                    return { ...msg, text: decryptedText };
-                  }
-                }
-
-                // If it's Audio, we decrypt it on-the-fly when the user clicks Play
-                // so we just return the message as is (with the encrypted file URL)
-                return msg;
-
-              } catch (err) {
-                console.error("Failed to decrypt message:", err);
-                return { ...msg, text: "⚠️ Decryption Error" };
-              }
-            })
-          );
-
-          setMessages(decryptedHistory);
-        } catch (err) {
-          console.log(err);
-        }
-      }
-    };
-    getMessages();
-  }, [currentChat, user]);
-
-  useEffect(() => { scrollRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
-
-  // --- Handlers ---
-
-  const handleSearch = async (e) => {
-    e.preventDefault();
-    setSearchError("");
-    setSearchResult(null);
-
-    // Prevent searching yourself
-    if (searchId === user.customId) {
-      setSearchError("You cannot add yourself.");
-      return;
-    }
-
-    // Check if already in contacts
-    if (conversations.some(c => c.customId === searchId)) {
-      setSearchError("User already in contacts.");
-      return;
-    }
-
-    try {
-      const res = await axios.get(`/api/chat/user/${searchId}`);
-      setSearchResult(res.data);
-    } catch (err) {
-      setSearchError("User not found.");
-    }
-  };
-
-  const addContact = () => {
-    if (searchResult) {
-      const newContacts = [...conversations, searchResult];
-      setConversations(newContacts);
-      localStorage.setItem("myContacts", JSON.stringify(newContacts)); // Persist
-
-      // Reset Search
-      setSearchId("");
-      setSearchResult(null);
-    }
-  };
-
-  const handleReceiveMessage = async (data) => {
-    try {
-      // 1. Get the shared secret
-      const secret = await getSecretKey(data.senderId);
-
-      if (!secret) {
-        console.error("Could not derive shared secret for sender:", data.senderId);
-        // Still set the message but mark it as undecryptable
-        setArrivalMessage({
-          ...data,
-          text: "⚠️ Unable to decrypt message (contact not found)",
-          createdAt: Date.now()
-        });
-        return;
-      }
-
-      let decryptedContent = "";
-
-      // 2. Decrypt if it's text
-      if (data.type === "text") {
-        decryptedContent = await decryptData(data.text, secret);
-      } else {
-        // For Audio/File, the URL is passed through, decryption happens on click
-        decryptedContent = data.text || "";
-      }
-
-      // 3. Update State
-      setArrivalMessage({
-        ...data,
-        text: decryptedContent,
-        createdAt: Date.now()
-      });
-    } catch (err) {
-      console.error("Decryption error:", err);
-      setArrivalMessage({
-        ...data,
-        text: "⚠️ Decryption failed",
-        createdAt: Date.now()
-      });
-    }
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!newMessage || !newMessage.trim()) return;
-
-    // Sanitize and limit message length
-    const sanitizedMessage = sanitizeText(newMessage.trim()).substring(0, 10000);
-
-    if (!sanitizedMessage) {
-      setError("Invalid message content");
-      return;
-    }
-
-    try {
-      // Encrypt Text
-      const secret = await getSecretKey(currentChat.customId);
-
-      if (!secret) {
-        console.error("Cannot send message: Unable to derive shared secret");
-        alert("Unable to encrypt message. Please try again.");
-        return;
-      }
-
-      const encryptedText = await encryptData(sanitizedMessage, secret);
-
-      const msg = {
-        senderId: user.customId,
-        receiverId: currentChat.customId,
-        text: encryptedText, // SEND CIPHERTEXT
-        type: "text"
-      };
-
-      socket.current.emit("send_message", msg);
-
-      // For local display, we show the PLAIN text, but store encrypted in DB
-      // Actually, to simulate real E2E, let's just push the plain text to UI state
-      // but the 'msg' object sent to socket is encrypted.
-      setMessages([...messages, { ...msg, text: sanitizedMessage, createdAt: Date.now() }]); // Store plain locally
-      setNewMessage("");
-    } catch (err) {
-      console.error("Failed to send message:", err);
-      alert("Failed to send message. Please try again.");
-    }
   };
 
   const EncryptedAudioPlayer = ({ url, senderId }) => {
@@ -528,11 +466,9 @@ function ChatInterface({ user, onLogout }) {
     const loadAudio = async () => {
       setLoading(true);
       try {
-        // 1. Fetch encrypted JSON file
         const res = await fetch(url);
         const encryptedJson = await res.text();
 
-        // 2. Decrypt
         const secret = await getSecretKey(senderId);
 
         if (!secret) {
@@ -542,7 +478,6 @@ function ChatInterface({ user, onLogout }) {
 
         const decryptedBuffer = await decryptData(encryptedJson, secret, true);
 
-        // 3. Create Blob URL
         const blob = new Blob([decryptedBuffer], { type: "audio/webm" });
         setAudioSrc(URL.createObjectURL(blob));
       } catch (e) {
@@ -581,21 +516,246 @@ function ChatInterface({ user, onLogout }) {
     );
   };
 
+  // --- Message Handling ---
+  useEffect(() => {
+    if (arrivalMessage) {
+      if (currentChat && arrivalMessage.senderId === currentChat.customId) {
+        setMessages((prev) => [...prev, arrivalMessage]);
+      }
+    }
+  }, [arrivalMessage, currentChat]);
+
+  // --- Fetch Chat History ---
+  useEffect(() => {
+    const getMessages = async () => {
+      if (currentChat) {
+        try {
+          const res = await axios.get(
+            `/api/chat/messages?user1=${user.customId}&user2=${currentChat.customId}`
+          );
+
+          const rawMessages = res.data;
+          const secret = await getSecretKey(currentChat.customId);
+
+          if (!secret) {
+            console.error("Could not derive shared secret for chat history");
+            setMessages(rawMessages.map(msg => ({
+              ...msg,
+              text: msg.type === "text" ? "⚠️ Unable to decrypt (missing key)" : msg.text
+            })));
+            return;
+          }
+
+          const decryptedHistory = await Promise.all(
+            rawMessages.map(async (msg) => {
+              try {
+                if (msg.type === "text") {
+                  if (msg.text.startsWith("{") && msg.text.includes("iv")) {
+                    const decryptedText = await decryptData(msg.text, secret);
+                    return { ...msg, text: decryptedText };
+                  }
+                }
+                return msg;
+              } catch (err) {
+                console.error("Failed to decrypt message:", err);
+                return { ...msg, text: "⚠️ Decryption Error" };
+              }
+            })
+          );
+
+          setMessages(decryptedHistory);
+        } catch (err) {
+          console.log(err);
+        }
+      }
+    };
+    getMessages();
+  }, [currentChat, user]);
+
+  useEffect(() => { 
+    scrollRef.current?.scrollIntoView({ behavior: "smooth" }); 
+  }, [messages]);
+
+  // --- Handlers ---
+  const handleSearch = async (e) => {
+    e.preventDefault();
+    setSearchError("");
+    setSearchResult(null);
+
+    if (searchId === user.customId) {
+      setSearchError("You cannot add yourself.");
+      return;
+    }
+
+    if (conversations.some(c => c.customId === searchId)) {
+      setSearchError("User already in contacts.");
+      return;
+    }
+
+    try {
+      const res = await axios.get(`/api/chat/user/${searchId}`);
+      setSearchResult(res.data);
+    } catch (err) {
+      setSearchError("User not found.");
+    }
+  };
+
+  const addContact = () => {
+    if (searchResult) {
+      const newContact = { ...searchResult, hasKeys: false };
+      const newContacts = [...conversations, newContact];
+      setConversations(newContacts);
+      localStorage.setItem("myContacts", JSON.stringify(newContacts));
+
+      setSearchId("");
+      setSearchResult(null);
+    }
+  };
+
+  const handleReceiveMessage = async (data) => {
+    try {
+      const secret = await getSecretKey(data.senderId);
+
+      if (!secret) {
+        console.error("Could not derive shared secret for sender:", data.senderId);
+        setArrivalMessage({
+          ...data,
+          text: "⚠️ Unable to decrypt message (keys not exchanged)",
+          createdAt: Date.now()
+        });
+        return;
+      }
+
+      let decryptedContent = "";
+
+      if (data.type === "text") {
+        decryptedContent = await decryptData(data.text, secret);
+      } else {
+        decryptedContent = data.text || "";
+      }
+
+      setArrivalMessage({
+        ...data,
+        text: decryptedContent,
+        createdAt: Date.now()
+      });
+    } catch (err) {
+      console.error("Decryption error:", err);
+      setArrivalMessage({
+        ...data,
+        text: "⚠️ Decryption failed",
+        createdAt: Date.now()
+      });
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!newMessage || !newMessage.trim()) return;
+
+    const sanitizedMessage = sanitizeText(newMessage.trim()).substring(0, 10000);
+
+    if (!sanitizedMessage) {
+      setError("Invalid message content");
+      return;
+    }
+
+    try {
+      const secret = await getSecretKey(currentChat.customId);
+
+      if (!secret) {
+        console.error("Cannot send message: Unable to derive shared secret");
+        alert("Unable to encrypt message. Please exchange keys first.");
+        return;
+      }
+
+      const encryptedText = await encryptData(sanitizedMessage, secret);
+
+      const msg = {
+        senderId: user.customId,
+        receiverId: currentChat.customId,
+        text: encryptedText,
+        type: "text"
+      };
+
+      socket.current.emit("send_message", msg);
+
+      setMessages([...messages, { ...msg, text: sanitizedMessage, createdAt: Date.now() }]);
+      setNewMessage("");
+    } catch (err) {
+      console.error("Failed to send message:", err);
+      alert("Failed to send message. Please try again.");
+    }
+  };
+
+  // --- Export/Import Keys ---
+  const exportKeys = () => {
+    const allKeys = localStorage.getItem("contactKeys") || "{}";
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(allKeys);
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", "encryption_keys_backup.json");
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+  };
+
+  const importKeys = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const imported = JSON.parse(event.target.result);
+        localStorage.setItem("contactKeys", JSON.stringify(imported));
+        alert("Keys imported successfully!");
+        window.location.reload();
+      } catch (err) {
+        alert("Failed to import keys. Invalid file format.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
   return (
     <div className="chat-container">
+      {/* Key Exchange Request Modal */}
+      {pendingKeyRequest && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h3>Key Exchange Request</h3>
+            <p>User <strong>{pendingKeyRequest.fromUserId}</strong> wants to establish encrypted communication.</p>
+            <div className="modal-actions">
+              <button onClick={acceptKeyExchange} className="accept-btn">Accept</button>
+              <button onClick={rejectKeyExchange} className="reject-btn">Reject</button>
+            </div>
+          </div>
+        </div>
+      )}
 
-      {/* 1. NAV RAIL */}
+      {/* Status Message */}
+      {keyExchangeStatus && (
+        <div className="status-banner">{keyExchangeStatus}</div>
+      )}
+
+      {/* NAV RAIL */}
       <div className="nav-rail">
         <h2 className="nav-logo">Press Freely</h2>
         <div className="nav-spacer"></div>
         <div className="my-id-display">My ID: <br /><strong>{user.customId}</strong></div>
+        <div className="key-management">
+          <button onClick={exportKeys} className="key-btn">📥 Export Keys</button>
+          <label className="key-btn" style={{ cursor: 'pointer' }}>
+            📤 Import Keys
+            <input type="file" accept=".json" onChange={importKeys} style={{ display: 'none' }} />
+          </label>
+        </div>
         <button onClick={onLogout} className="logout-btn">Logout</button>
       </div>
 
-      {/* 2. CONTACT LIST + ADD USER */}
+      {/* CONTACT LIST + ADD USER */}
       <div className="contact-list-panel">
-
-        {/* ADD USER SECTION */}
         <div className="add-user-section">
           <h4>Add Contact</h4>
           <form onSubmit={handleSearch} className="search-form">
@@ -617,7 +777,6 @@ function ChatInterface({ user, onLogout }) {
           {searchError && <div className="search-error">{searchError}</div>}
         </div>
 
-        {/* LIST SECTION */}
         <div className="conversations-list">
           {conversations.length === 0 && <p className="no-contacts">No contacts yet.</p>}
 
@@ -630,6 +789,7 @@ function ChatInterface({ user, onLogout }) {
               <div className="avatar-wrapper">
                 <div className="avatar">{c.username.charAt(0).toUpperCase()}</div>
                 {c.isOnline && <span className="online-dot"></span>}
+                {!c.hasKeys && <span className="no-key-indicator" title="Keys not exchanged">🔒</span>}
               </div>
               <span className="contact-name">{c.username}</span>
             </div>
@@ -637,7 +797,7 @@ function ChatInterface({ user, onLogout }) {
         </div>
       </div>
 
-      {/* 3. CHAT AREA (Same as before) */}
+      {/* CHAT AREA */}
       <div className="chat-box">
         {receivingCall && !callAccepted ? (
           <div className="call-notification">
@@ -649,26 +809,37 @@ function ChatInterface({ user, onLogout }) {
           </div>
         ) : null}
 
-        {/* Hidden Audio Element for Remote Stream */}
         <audio ref={userAudio} autoPlay />
 
-        {/* Active Call UI */}
         {callAccepted && !callEnded ? (
           <div className="active-call-bar">
             <span>On Call with <b>{currentChat?.username || caller}</b></span>
             <button className="end-call-btn" onClick={leaveCall}>End Call</button>
           </div>
         ) : null}
+
         {currentChat ? (
           <>
             <div className="chat-header">
-              <div className="header-info">To: <b>{currentChat.username}</b></div>
+              <div className="header-info">
+                To: <b>{currentChat.username}</b>
+                {!currentChat.hasKeys && (
+                  <button 
+                    onClick={() => initiateKeyExchange(currentChat.customId)} 
+                    className="exchange-keys-btn"
+                    title="Exchange encryption keys"
+                  >
+                    🔑 Exchange Keys
+                  </button>
+                )}
+              </div>
 
               <div className="header-actions">
-                {/* CALL BUTTON */}
-                <button className="call-btn" onClick={() => callUser(currentChat.customId)}>
-                  📞 Call
-                </button>
+                {currentChat.hasKeys && (
+                  <button className="call-btn" onClick={() => callUser(currentChat.customId)}>
+                    📞 Call
+                  </button>
+                )}
               </div>
             </div>
 
@@ -676,33 +847,38 @@ function ChatInterface({ user, onLogout }) {
               {messages.map((m, index) => (
                 <div key={index} ref={scrollRef} className={`message-wrapper ${m.senderId === user.customId ? "own" : "friend"}`}>
                   <div className="message-bubble">
-                    {renderMessageContent(m)} {/* <--- Use Helper */}
+                    {renderMessageContent(m)}
                     <div className="message-time">{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                   </div>
                 </div>
               ))}
             </div>
 
-            <div className="chat-input-area">
-              <input
-                type="text"
-                placeholder="Type a message..."
-                value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSubmit(e)}
-              />
+            {currentChat.hasKeys ? (
+              <div className="chat-input-area">
+                <input
+                  type="text"
+                  placeholder="Type a message..."
+                  value={newMessage}
+                  onChange={(e) => setNewMessage(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSubmit(e)}
+                />
 
-              {/* MIC BUTTON */}
-              <button
-                className={`mic-btn ${isRecording ? "recording" : ""}`}
-                onClick={isRecording ? stopRecording : startRecording}
-                type="button"
-              >
-                {isRecording ? "⬛" : "🎤"}
-              </button>
+                <button
+                  className={`mic-btn ${isRecording ? "recording" : ""}`}
+                  onClick={isRecording ? stopRecording : startRecording}
+                  type="button"
+                >
+                  {isRecording ? "⬛" : "🎤"}
+                </button>
 
-              <button onClick={handleSubmit} className="send-btn">Send</button>
-            </div>
+                <button onClick={handleSubmit} className="send-btn">Send</button>
+              </div>
+            ) : (
+              <div className="no-keys-warning">
+                🔒 Exchange encryption keys to start messaging
+              </div>
+            )}
           </>
         ) : (
           <div className="no-chat">Select a contact to start chatting</div>

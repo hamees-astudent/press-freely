@@ -1,6 +1,5 @@
 import axios from "axios";
 import { useState } from "react";
-import { exportKey, generateKeyPair } from "../e2e";
 import { sanitizeUsername } from "../utils/sanitize";
 
 // API configuration
@@ -35,21 +34,10 @@ function Login({ onLogin }) {
                 throw new Error("Username can only contain letters, numbers, underscores and hyphens");
             }
 
-            // 1. Generate E2E Keys
-            const keyPair = await generateKeyPair();
-
-            // 2. Save Private Key locally (NEVER SEND THIS)
-            const privateJwk = await exportKey(keyPair.privateKey);
-            localStorage.setItem("myPrivateKey", privateJwk);
-
-            // 3. Prepare Public Key to send
-            const publicJwk = await exportKey(keyPair.publicKey);
-
-            // 4. Send to Server
+            // Send to Server (no key generation during login)
             const res = await axios.post("/api/auth/login", {
                 username: sanitizedUsername,
-                passphrase,
-                publicKey: publicJwk
+                passphrase
             });
 
             onLogin(res.data);
