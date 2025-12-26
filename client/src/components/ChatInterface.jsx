@@ -117,6 +117,159 @@ function ChatInterface({ user, onLogout }) {
   const socket = useRef();
   const scrollRef = useRef();
 
+  // --- Key Exchange Handlers (defined before useEffect) ---
+  const handleKeyExchangeRequest = async ({ fromUserId, publicKey }) => {
+    console.log("Received key exchange request from:", fromUserId);
+    setPendingKeyRequest({ fromUserId, publicKey });
+  };
+
+  const handleKeyExchangeResponse = async ({ fromUserId, publicKey, accepted }) => {
+    if (!accepted) {
+      setKeyExchangeStatus(`User ${fromUserId} declined key exchange`);
+      setTimeout(() => setKeyExchangeStatus(""), 3000);
+      return;
+    }
+
+    // Get our keys for this contact
+    const keys = getContactKeys(fromUserId);
+    if (!keys) {
+      console.error("No keys found for contact");
+      return;
+    }
+
+    // Save their public key
+    keys.theirPublicKey = publicKey;
+    saveContactKeys(fromUserId, keys);
+
+    setKeyExchangeStatus(`Key exchange with ${fromUserId} completed!`);
+    setTimeout(() => setKeyExchangeStatus(""), 3000);
+
+    // Mark contact as having keys
+    setConversations(prev => {
+      const updated = prev.map(c =>
+        c.customId === fromUserId ? { ...c, hasKeys: true } : c
+      );
+      localStorage.setItem("myContacts", JSON.stringify(updated));
+      return updated;
+    });
+
+    // Update currentChat if this is the active chat
+    setCurrentChat(prev => {
+      if (prev && prev.customId === fromUserId) {
+        return { ...prev, hasKeys: true };
+      }
+      return prev;
+    });
+  };
+
+  const acceptKeyExchange = async () => {
+    if (!pendingKeyRequest) return;
+
+    const { fromUserId, publicKey } = pendingKeyRequest;
+
+    // Generate new key pair for this contact
+    const keyPair = await generateKeyPair();
+    const myPrivateKey = await exportKey(keyPair.privateKey);
+    const myPublicKey = await exportKey(keyPair.publicKey);
+
+    // Save keys
+    saveContactKeys(fromUserId, {
+      myPrivateKey,
+      myPublicKey,
+      theirPublicKey: publicKey
+    });
+
+    // Send response with our public key
+    socket.current.emit("respond_key_exchange", {
+      targetUserId: fromUserId,
+      publicKey: myPublicKey,
+      accepted: true
+    });
+
+    setPendingKeyRequest(null);
+    setKeyExchangeStatus(`Key exchange accepted with ${fromUserId}`);
+    setTimeout(() => setKeyExchangeStatus(""), 3000);
+
+    // Update contact list to show keys are established
+    setConversations(prev => {
+      const updated = prev.map(c =>
+        c.customId === fromUserId ? { ...c, hasKeys: true } : c
+      );
+      localStorage.setItem("myContacts", JSON.stringify(updated));
+      return updated;
+    });
+
+    // Update currentChat if this is the active chat
+    setCurrentChat(prev => {
+      if (prev && prev.customId === fromUserId) {
+        return { ...prev, hasKeys: true };
+      }
+      return prev;
+    });
+  };
+
+  const rejectKeyExchange = () => {
+    if (!pendingKeyRequest) return;
+
+    socket.current.emit("respond_key_exchange", {
+      targetUserId: pendingKeyRequest.fromUserId,
+      publicKey: null,
+      accepted: false
+    });
+
+    setPendingKeyRequest(null);
+  };
+
+  const initiateKeyExchange = async (contactId) => {
+    // Generate new key pair for this contact
+    const keyPair = await generateKeyPair();
+    const myPrivateKey = await exportKey(keyPair.privateKey);
+    const myPublicKey = await exportKey(keyPair.publicKey);
+
+    // Save our keys (without their public key yet)
+    saveContactKeys(contactId, {
+      myPrivateKey,
+      myPublicKey,
+      theirPublicKey: null
+    });
+
+    // Send request
+    socket.current.emit("request_key_exchange", {
+      targetUserId: contactId,
+      publicKey: myPublicKey
+    });
+
+    setKeyExchangeStatus(`Key exchange request sent to ${contactId}`);
+    setTimeout(() => setKeyExchangeStatus(""), 3000);
+  };
+
+  // --- Call Handlers (defined before useEffect) ---
+  const handleIncomingCall = async (data) => {
+    const secret = await getSecretKey(data.from);
+    if (!secret) {
+      console.error("Cannot decrypt call signal - missing keys");
+      return;
+    }
+
+    const decryptedSignalStr = await decryptData(data.signal, secret);
+    const signal = JSON.parse(decryptedSignalStr);
+
+    setReceivingCall(true);
+    setCaller(data.from);
+    setCallerSignal(signal);
+  };
+
+  const handleCallEnded = () => {
+    setCallEnded(true);
+    setCallAccepted(false);
+    setReceivingCall(false);
+    setCaller("");
+    if (connectionRef.current) connectionRef.current.destroy();
+    window.location.reload();
+  };
+
+
+
   // --- Socket Logic ---
   useEffect(() => {
     socket.current = io(WS_URL, {
@@ -161,141 +314,6 @@ function ChatInterface({ user, onLogout }) {
       socket.current.off("call_ended", handleCallEnded);
     };
   }, [user]);
-
-  // --- Key Exchange Handlers ---
-  const handleKeyExchangeRequest = async ({ fromUserId, publicKey }) => {
-    console.log("Received key exchange request from:", fromUserId);
-    setPendingKeyRequest({ fromUserId, publicKey });
-  };
-
-  const handleKeyExchangeResponse = async ({ fromUserId, publicKey, accepted }) => {
-    if (!accepted) {
-      setKeyExchangeStatus(`User ${fromUserId} declined key exchange`);
-      setTimeout(() => setKeyExchangeStatus(""), 3000);
-      return;
-    }
-
-    // Get our keys for this contact
-    const keys = getContactKeys(fromUserId);
-    if (!keys) {
-      console.error("No keys found for contact");
-      return;
-    }
-
-    // Save their public key
-    keys.theirPublicKey = publicKey;
-    saveContactKeys(fromUserId, keys);
-
-    setKeyExchangeStatus(`Key exchange with ${fromUserId} completed!`);
-    setTimeout(() => setKeyExchangeStatus(""), 3000);
-
-    // Mark contact as having keys
-    setConversations(prev => {
-      const updated = prev.map(c => 
-        c.customId === fromUserId ? { ...c, hasKeys: true } : c
-      );
-      localStorage.setItem("myContacts", JSON.stringify(updated));
-      return updated;
-    });
-  };
-
-  const acceptKeyExchange = async () => {
-    if (!pendingKeyRequest) return;
-
-    const { fromUserId, publicKey } = pendingKeyRequest;
-
-    // Generate new key pair for this contact
-    const keyPair = await generateKeyPair();
-    const myPrivateKey = await exportKey(keyPair.privateKey);
-    const myPublicKey = await exportKey(keyPair.publicKey);
-
-    // Save keys
-    saveContactKeys(fromUserId, {
-      myPrivateKey,
-      myPublicKey,
-      theirPublicKey: publicKey
-    });
-
-    // Send response with our public key
-    socket.current.emit("respond_key_exchange", {
-      targetUserId: fromUserId,
-      publicKey: myPublicKey,
-      accepted: true
-    });
-
-    setPendingKeyRequest(null);
-    setKeyExchangeStatus(`Key exchange accepted with ${fromUserId}`);
-    setTimeout(() => setKeyExchangeStatus(""), 3000);
-
-    // Update contact list to show keys are established
-    setConversations(prev => {
-      const updated = prev.map(c => 
-        c.customId === fromUserId ? { ...c, hasKeys: true } : c
-      );
-      localStorage.setItem("myContacts", JSON.stringify(updated));
-      return updated;
-    });
-  };
-
-  const rejectKeyExchange = () => {
-    if (!pendingKeyRequest) return;
-
-    socket.current.emit("respond_key_exchange", {
-      targetUserId: pendingKeyRequest.fromUserId,
-      publicKey: null,
-      accepted: false
-    });
-
-    setPendingKeyRequest(null);
-  };
-
-  const initiateKeyExchange = async (contactId) => {
-    // Generate new key pair for this contact
-    const keyPair = await generateKeyPair();
-    const myPrivateKey = await exportKey(keyPair.privateKey);
-    const myPublicKey = await exportKey(keyPair.publicKey);
-
-    // Save our keys (without their public key yet)
-    saveContactKeys(contactId, {
-      myPrivateKey,
-      myPublicKey,
-      theirPublicKey: null
-    });
-
-    // Send request
-    socket.current.emit("request_key_exchange", {
-      targetUserId: contactId,
-      publicKey: myPublicKey
-    });
-
-    setKeyExchangeStatus(`Key exchange request sent to ${contactId}`);
-    setTimeout(() => setKeyExchangeStatus(""), 3000);
-  };
-
-  // --- Call Handlers ---
-  const handleIncomingCall = async (data) => {
-    const secret = await getSecretKey(data.from);
-    if (!secret) {
-      console.error("Cannot decrypt call signal - missing keys");
-      return;
-    }
-
-    const decryptedSignalStr = await decryptData(data.signal, secret);
-    const signal = JSON.parse(decryptedSignalStr);
-
-    setReceivingCall(true);
-    setCaller(data.from);
-    setCallerSignal(signal);
-  };
-
-  const handleCallEnded = () => {
-    setCallEnded(true);
-    setCallAccepted(false);
-    setReceivingCall(false);
-    setCaller("");
-    if (connectionRef.current) connectionRef.current.destroy();
-    window.location.reload();
-  };
 
   const callUser = (id) => {
     navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then((currentStream) => {
@@ -440,13 +458,19 @@ function ChatInterface({ user, onLogout }) {
       headers: { "Content-Type": "multipart/form-data" },
     });
 
-    socket.current.emit("send_message", {
+    const audioMsg = {
       senderId: user.customId,
       receiverId: currentChat.customId,
       text: "",
       type: "audio",
-      fileUrl: res.data.fileUrl
-    });
+      fileUrl: res.data.fileUrl,
+      createdAt: Date.now()
+    };
+
+    socket.current.emit("send_message", audioMsg);
+
+    // Add to local messages immediately
+    setMessages(prev => [...prev, audioMsg]);
   };
 
   // --- Message Rendering ---
@@ -572,8 +596,8 @@ function ChatInterface({ user, onLogout }) {
     getMessages();
   }, [currentChat, user]);
 
-  useEffect(() => { 
-    scrollRef.current?.scrollIntoView({ behavior: "smooth" }); 
+  useEffect(() => {
+    scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   // --- Handlers ---
@@ -824,8 +848,8 @@ function ChatInterface({ user, onLogout }) {
               <div className="header-info">
                 To: <b>{currentChat.username}</b>
                 {!currentChat.hasKeys && (
-                  <button 
-                    onClick={() => initiateKeyExchange(currentChat.customId)} 
+                  <button
+                    onClick={() => initiateKeyExchange(currentChat.customId)}
                     className="exchange-keys-btn"
                     title="Exchange encryption keys"
                   >
