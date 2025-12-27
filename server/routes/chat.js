@@ -87,6 +87,13 @@ router.get("/messages", validateMessageQuery, async (req, res) => {
         .sort({ createdAt: 1 }) // Sort by time (oldest first)
         .limit(1000); // Limit to prevent excessive data transfer
 
+        console.log(`Fetched ${messages.length} messages between ${user1} and ${user2}`);
+        const typeCounts = messages.reduce((acc, msg) => {
+            acc[msg.type] = (acc[msg.type] || 0) + 1;
+            return acc;
+        }, {});
+        console.log('Message types:', typeCounts);
+
         res.status(200).json(messages);
     } catch (err) {
         console.error("Error fetching messages:", err);

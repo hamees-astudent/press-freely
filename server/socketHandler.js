@@ -95,18 +95,36 @@ module.exports = (io) => {
 
         // Validate message type
         if (!['text', 'audio', 'image', 'video', 'file'].includes(data.type)) {
+          console.warn(`Invalid message type: ${data.type}`);
           return;
         }
 
         // Validate content based on type
         if (data.type === 'text' && (!data.text || data.text.length > 10000)) {
+          console.warn(`Invalid text message: ${data.text ? 'too long' : 'empty'}`);
           return;
         }
 
-        if (['audio', 'image', 'video', 'file'].includes(data.type) && 
-            (!data.fileUrl || !data.fileUrl.startsWith(process.env.SERVER_URL || 'http://localhost:5000'))) {
-          return;
+        if (['audio', 'image', 'video', 'file'].includes(data.type)) {
+          if (!data.fileUrl) {
+            console.warn(`Missing fileUrl for ${data.type} message`);
+            return;
+          }
+          
+          // More flexible URL validation - check if it contains /uploads/
+          const serverUrl = process.env.SERVER_URL || 'http://localhost:5000';
+          const isValidUrl = data.fileUrl.startsWith(serverUrl) || 
+                           data.fileUrl.includes('/uploads/') ||
+                           data.fileUrl.startsWith('http://localhost:5000');
+          
+          if (!isValidUrl) {
+            console.warn(`Invalid fileUrl for ${data.type} message: ${data.fileUrl}`);
+            console.warn(`Expected to start with: ${serverUrl}`);
+            return;
+          }
         }
+
+        console.log(`Saving ${data.type} message from ${userId} to ${data.receiverId}`);
 
         const newMessage = new Message({
           senderId: userId, // Use verified userId
@@ -118,6 +136,8 @@ module.exports = (io) => {
         });
         
         await newMessage.save();
+        
+        console.log(`Message saved successfully: ${newMessage._id}, type: ${newMessage.type}`);
 
         const receiverSocketId = onlineUsers[data.receiverId];
         if (receiverSocketId) {
@@ -130,6 +150,9 @@ module.exports = (io) => {
             fileName: data.fileName,
             createdAt: newMessage.createdAt
           });
+          console.log(`Message emitted to receiver: ${data.receiverId}`);
+        } else {
+          console.log(`Receiver ${data.receiverId} is offline, message saved to database`);
         }
       } catch (err) {
         console.error("Error sending message:", err);

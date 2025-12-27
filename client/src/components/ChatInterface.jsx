@@ -765,6 +765,12 @@ function ChatInterface({ user, onLogout }) {
         createdAt: Date.now()
       };
 
+      console.log(`Sending ${messageType} message:`, {
+        type: fileMsg.type,
+        fileUrl: fileMsg.fileUrl,
+        fileName: fileMsg.fileName
+      });
+
       socket.current.emit("send_message", fileMsg);
 
       // Add to local messages immediately
