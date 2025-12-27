@@ -530,6 +530,48 @@ function ChatInterface({ user, onLogout }) {
     };
   }, [user]);
 
+  // Synchronize hasKeys flags with actual key existence on mount
+  useEffect(() => {
+    const syncHasKeysFlags = () => {
+      const savedContacts = localStorage.getItem("myContacts");
+      if (!savedContacts) return;
+
+      const contacts = JSON.parse(savedContacts);
+      let needsUpdate = false;
+      
+      const updatedContacts = contacts.map(contact => {
+        const keys = getContactKeys(contact.customId);
+        const hasCompleteKeys = keys && keys.myPrivateKey && keys.myPublicKey && keys.theirPublicKey;
+        
+        // Only update if there's a mismatch
+        if (contact.hasKeys !== hasCompleteKeys) {
+          needsUpdate = true;
+          return { ...contact, hasKeys: hasCompleteKeys };
+        }
+        return contact;
+      });
+
+      if (needsUpdate) {
+        console.log("Synchronizing hasKeys flags with imported keys");
+        setConversations(updatedContacts);
+        localStorage.setItem("myContacts", JSON.stringify(updatedContacts));
+        
+        // Also update currentChat if it's affected
+        setCurrentChat(prev => {
+          if (!prev) return prev;
+          const keys = getContactKeys(prev.customId);
+          const hasCompleteKeys = keys && keys.myPrivateKey && keys.myPublicKey && keys.theirPublicKey;
+          if (prev.hasKeys !== hasCompleteKeys) {
+            return { ...prev, hasKeys: hasCompleteKeys };
+          }
+          return prev;
+        });
+      }
+    };
+
+    syncHasKeysFlags();
+  }, []);
+
   const callUser = (id) => {
     navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then((currentStream) => {
       setStream(currentStream);
@@ -1216,6 +1258,20 @@ function ChatInterface({ user, onLogout }) {
       try {
         const imported = JSON.parse(event.target.result);
         localStorage.setItem("contactKeys", JSON.stringify(imported));
+        
+        // Update hasKeys flags for all contacts that now have complete keys
+        const contactIds = Object.keys(imported);
+        const savedContacts = localStorage.getItem("myContacts");
+        if (savedContacts) {
+          const contacts = JSON.parse(savedContacts);
+          const updatedContacts = contacts.map(contact => {
+            const keys = imported[contact.customId];
+            const hasCompleteKeys = keys && keys.myPrivateKey && keys.myPublicKey && keys.theirPublicKey;
+            return { ...contact, hasKeys: hasCompleteKeys };
+          });
+          localStorage.setItem("myContacts", JSON.stringify(updatedContacts));
+        }
+        
         alert("Keys imported successfully!");
         window.location.reload();
       } catch (err) {
