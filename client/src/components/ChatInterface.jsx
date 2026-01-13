@@ -4,6 +4,8 @@ import SimplePeer from "simple-peer";
 import { io } from "socket.io-client";
 import { decryptData, deriveSecretKey, encryptData, exportKey, generateKeyPair, importKey } from "../e2e";
 import { sanitizeText } from "../utils/sanitize";
+import { compressImage, getAudioConstraints, getMediaRecorderOptions, getCompressionStrategy } from "../utils/compression";
+import { getPeerConnectionConfig, getCallMediaConstraints, calculateNetworkQuality, getRecommendedBitrate, formatNetworkQuality, applyAdaptiveBitrate, NetworkQuality } from "../utils/webrtc";
 import "./ChatInterface.css";
 
 // API configuration
@@ -275,11 +277,14 @@ function ChatInterface({ user, onLogout }) {
   const [caller, setCaller] = useState("");
   const [callerSignal, setCallerSignal] = useState(null);
   const [stream, setStream] = useState(null);
+  const [networkQuality, setNetworkQuality] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(null);
 
   const myAudio = useRef();
   const userAudio = useRef();
   const connectionRef = useRef();
   const typingTimeoutRef = useRef(null);
+  const qualityMonitorRef = useRef(null);
 
   const socket = useRef();
   const scrollRef = useRef();
@@ -576,8 +581,38 @@ function ChatInterface({ user, onLogout }) {
     syncHasKeysFlags();
   }, []);
 
+  // Monitor network quality during calls
+  const startQualityMonitoring = (peerConnection) => {
+    if (qualityMonitorRef.current) {
+      clearInterval(qualityMonitorRef.current);
+    }
+
+    qualityMonitorRef.current = setInterval(async () => {
+      try {
+        const stats = await peerConnection.getStats();
+        const metrics = calculateNetworkQuality(stats);
+        setNetworkQuality(metrics);
+
+        // Apply adaptive bitrate based on quality
+        const recommendedBitrate = getRecommendedBitrate(metrics.quality);
+        await applyAdaptiveBitrate(peerConnection, recommendedBitrate);
+      } catch (err) {
+        console.error('Quality monitoring error:', err);
+      }
+    }, 2000); // Check every 2 seconds
+  };
+
+  const stopQualityMonitoring = () => {
+    if (qualityMonitorRef.current) {
+      clearInterval(qualityMonitorRef.current);
+      qualityMonitorRef.current = null;
+    }
+    setNetworkQuality(null);
+  };
+
   const callUser = (id) => {
-    navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then((currentStream) => {
+    const constraints = getCallMediaConstraints('high');
+    navigator.mediaDevices.getUserMedia(constraints).then((currentStream) => {
       setStream(currentStream);
 
       const peer = new SimplePeer({
@@ -630,13 +665,16 @@ function ChatInterface({ user, onLogout }) {
   const answerCall = () => {
     setCallAccepted(true);
 
-    navigator.mediaDevices.getUserMedia({ video: false, audio: true }).then((currentStream) => {
+    const constraints = getCallMediaConstraints('high');
+    navigator.mediaDevices.getUserMedia(constraints).then((currentStream) => {
       setStream(currentStream);
 
+      const peerConfig = getPeerConnectionConfig();
       const peer = new SimplePeer({
         initiator: false,
-        trickle: false,
+        trickle: true,
         stream: currentStream,
+        config: peerConfig
       });
 
       peer.on("signal", (data) => {
@@ -647,13 +685,24 @@ function ChatInterface({ user, onLogout }) {
         if (userAudio.current) userAudio.current.srcObject = remoteStream;
       });
 
+      peer.on("connect", () => {
+        console.log('Peer connected, starting quality monitoring');
+        if (peer._pc) {
+          startQualityMonitoring(peer._pc);
+        }
+      });
+
       peer.signal(callerSignal);
       connectionRef.current = peer;
+    }).catch((err) => {
+      console.error("Media access error:", err);
+      alert("Could not access microphone. Please check permissions.");
     });
   };
 
   const leaveCall = () => {
     setCallEnded(true);
+    stopQualityMonitoring();
 
     if (currentChat?.customId || caller) {
       const targetId = currentChat?.customId || caller;
@@ -672,8 +721,11 @@ function ChatInterface({ user, onLogout }) {
   // --- Audio Recording ---
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorderRef.current = new MediaRecorder(stream);
+      const constraints = getAudioConstraints('medium');
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      const options = getMediaRecorderOptions();
+      mediaRecorderRef.current = new MediaRecorder(stream, options);
       audioChunksRef.current = [];
 
       mediaRecorderRef.current.ondataavailable = (event) => {
@@ -686,9 +738,10 @@ function ChatInterface({ user, onLogout }) {
 
       mediaRecorderRef.current.start();
       setIsRecording(true);
+      console.log('Recording started with optimized audio settings');
     } catch (err) {
       console.error("Error accessing microphone:", err);
-      alert("Microphone access denied.");
+      alert("Microphone access denied or not available.");
     }
   };
 
@@ -746,17 +799,6 @@ function ChatInterface({ user, onLogout }) {
       return;
     }
 
-    // Warn about large files
-    if (file.size > 10 * 1024 * 1024) {
-      const proceed = window.confirm(
-        `This file is ${(file.size / 1024 / 1024).toFixed(2)}MB. Large files may take longer to encrypt and upload. Continue?`
-      );
-      if (!proceed) {
-        e.target.value = "";
-        return;
-      }
-    }
-
     try {
       const secret = await getSecretKey(currentChat.customId);
       if (!secret) {
@@ -765,29 +807,67 @@ function ChatInterface({ user, onLogout }) {
         return;
       }
 
-      // Show loading indicator
-      console.log(`Encrypting ${file.name}...`);
+      // Check compression strategy
+      const strategy = getCompressionStrategy(file);
+      let fileToUpload = file;
+      
+      setUploadProgress({ status: 'compressing', progress: 0 });
+
+      // Compress images before encryption
+      if (strategy.shouldCompress && strategy.method === 'image') {
+        const shouldCompress = file.size > 1024 * 1024 ? 
+          window.confirm(
+            `This image is ${(file.size / 1024 / 1024).toFixed(2)}MB. ` +
+            `Compress to ~${(strategy.estimatedSize / 1024 / 1024).toFixed(2)}MB before uploading?`
+          ) : true;
+        
+        if (shouldCompress) {
+          try {
+            const compressedBlob = await compressImage(file);
+            fileToUpload = new File([compressedBlob], file.name, { type: 'image/webp' });
+            console.log(`Compression saved ${((file.size - fileToUpload.size) / 1024 / 1024).toFixed(2)}MB`);
+          } catch (err) {
+            console.error('Compression failed, using original:', err);
+          }
+        }
+      }
+
+      // Warn about large files
+      if (fileToUpload.size > 10 * 1024 * 1024) {
+        const proceed = window.confirm(
+          `This file is ${(fileToUpload.size / 1024 / 1024).toFixed(2)}MB. Large files may take longer to encrypt and upload. Continue?`
+        );
+        if (!proceed) {
+          setUploadProgress(null);
+          e.target.value = "";
+          return;
+        }
+      }
+
+      setUploadProgress({ status: 'encrypting', progress: 0 });
+      console.log(`Encrypting ${fileToUpload.name}...`);
 
       // Read file as ArrayBuffer
-      const buffer = await file.arrayBuffer();
+      const buffer = await fileToUpload.arrayBuffer();
 
       // Encrypt the file
       const encryptedJson = await encryptData(buffer, secret);
 
-      console.log(`Uploading encrypted ${file.name}...`);
+      setUploadProgress({ status: 'uploading', progress: 0 });
+      console.log(`Uploading encrypted ${fileToUpload.name}...`);
 
       // Create encrypted blob
       const encryptedBlob = new Blob([encryptedJson], { type: "application/json" });
       const formData = new FormData();
-      formData.append("file", encryptedBlob, `encrypted_${file.name}.json`);
+      formData.append("file", encryptedBlob, `encrypted_${fileToUpload.name}.json`);
 
-      // Upload encrypted file with longer timeout for large files
+      // Upload encrypted file with progress tracking
       const res = await axios.post("/api/upload", formData, {
         headers: { "Content-Type": "multipart/form-data" },
-        timeout: 120000, // 2 minutes timeout for large files
+        timeout: 120000,
         onUploadProgress: (progressEvent) => {
           const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          console.log(`Upload progress: ${percentCompleted}%`);
+          setUploadProgress({ status: 'uploading', progress: percentCompleted });
         }
       });
 
@@ -802,6 +882,27 @@ function ChatInterface({ user, onLogout }) {
       }
 
       const fileMsg = {
+        senderId: user.customId,
+        receiverId: currentChat.customId,
+        text: "",
+        type: messageType,
+        fileUrl: res.data.fileUrl,
+        fileName: file.name,
+        createdAt: Date.now()
+      };
+
+      socket.current.emit("send_message", fileMsg);
+      setMessages(prev => [...prev, fileMsg]);
+      
+      setUploadProgress(null);
+      e.target.value = "";
+    } catch (err) {
+      console.error('Upload error:', err);
+      setUploadProgress(null);
+      alert(err.response?.data?.message || "Failed to upload file. Please try again.");
+      e.target.value = "";
+    }
+  };
         senderId: user.customId,
         receiverId: currentChat.customId,
         text: "",
@@ -1322,16 +1423,16 @@ function ChatInterface({ user, onLogout }) {
   };
 
   return (
-    <div className="chat-container">
+    <div className="chat-container" role="main">
       {/* Key Exchange Request Modal */}
       {pendingKeyRequest && (
-        <div className="modal-overlay">
+        <div className="modal-overlay" role="dialog" aria-labelledby="key-exchange-title" aria-modal="true">
           <div className="modal-content">
-            <h3>Key Exchange Request</h3>
+            <h3 id="key-exchange-title">Key Exchange Request</h3>
             <p>User <strong>{pendingKeyRequest.fromUserId}</strong> wants to establish encrypted communication.</p>
             <div className="modal-actions">
-              <button onClick={acceptKeyExchange} className="accept-btn">Accept</button>
-              <button onClick={rejectKeyExchange} className="reject-btn">Reject</button>
+              <button onClick={acceptKeyExchange} className="accept-btn" aria-label="Accept key exchange request">Accept</button>
+              <button onClick={rejectKeyExchange} className="reject-btn" aria-label="Reject key exchange request">Reject</button>
             </div>
           </div>
         </div>
@@ -1339,14 +1440,26 @@ function ChatInterface({ user, onLogout }) {
 
       {/* Settings Modal */}
       {showSettings && (
-        <div className="modal-overlay">
+        <div className="modal-overlay" role="dialog" aria-labelledby="settings-title" aria-modal="true">
           <div className="modal-content">
-            <h3>Settings</h3>
+            <h3 id="settings-title">Settings</h3>
             <div className="settings-section">
               <h4>Encryption Keys</h4>
               <p>Backup and restore your encryption keys to access encrypted messages on other devices.</p>
               <div className="key-management">
-                <button onClick={exportKeys} className="key-btn">📥 Export Keys</button>
+                <button onClick={exportKeys} className="key-btn" aria-label="Export encryption keys">📥 Export Keys</button>
+                <label className="key-btn" style={{ cursor: 'pointer' }} aria-label="Import encryption keys">
+                  📤 Import Keys
+                  <input type="file" accept=".json" onChange={importKeys} style={{ display: 'none' }} aria-label="Choose key file" />
+                </label>
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button onClick={() => setShowSettings(false)} className="accept-btn" aria-label="Close settings">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
                 <label className="key-btn" style={{ cursor: 'pointer' }}>
                   📤 Import Keys
                   <input type="file" accept=".json" onChange={importKeys} style={{ display: 'none' }} />
@@ -1366,38 +1479,57 @@ function ChatInterface({ user, onLogout }) {
       )}
 
       {/* NAV RAIL */}
-      <div className="nav-rail">
+      <nav className="nav-rail" aria-label="Main navigation">
         <h2 className="nav-logo">Press Freely</h2>
         <div className="nav-spacer"></div>
-        <div className="my-id-display">My ID: <br /><strong>{user.customId}</strong></div>
-        <button onClick={() => setShowSettings(true)} className="settings-btn">⚙️ Settings</button>
-        <button onClick={onLogout} className="logout-btn">Logout</button>
-      </div>
+        <div className="my-id-display" role="status" aria-label="Your user ID">My ID: <br /><strong>{user.customId}</strong></div>
+        <button onClick={() => setShowSettings(true)} className="settings-btn" aria-label="Open settings">⚙️ Settings</button>
+        <button onClick={onLogout} className="logout-btn" aria-label="Logout from application">Logout</button>
+      </nav>
+
+      {/* Upload Progress Indicator */}
+      {uploadProgress && (
+        <div className="upload-progress-overlay" role="alert" aria-live="polite">
+          <div className="upload-progress-card">
+            <h4>
+              {uploadProgress.status === 'compressing' && '📦 Compressing...'}
+              {uploadProgress.status === 'encrypting' && '🔐 Encrypting...'}
+              {uploadProgress.status === 'uploading' && `📤 Uploading... ${uploadProgress.progress}%`}
+            </h4>
+            {uploadProgress.status === 'uploading' && (
+              <div className="progress-bar">
+                <div className="progress-fill" style={{ width: `${uploadProgress.progress}%` }}></div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* CONTACT LIST + ADD USER */}
-      <div className="contact-list-panel">
+      <aside className="contact-list-panel" aria-label="Contact list">
         <div className="add-user-section">
           <h4>Add Contact</h4>
-          <form onSubmit={handleSearch} className="search-form">
+          <form onSubmit={handleSearch} className="search-form" aria-label="Search for contact">
             <input
               type="text"
               placeholder="Enter ID"
               value={searchId}
               onChange={(e) => setSearchId(e.target.value)}
+              aria-label="Enter contact ID"
             />
-            <button type="submit">🔍</button>
+            <button type="submit" aria-label="Search contact">🔍</button>
           </form>
 
           {searchResult && (
-            <div className="search-result">
+            <div className="search-result" role="status">
               <span>Found: <b>{searchResult.username}</b></span>
-              <button onClick={addContact} className="add-btn">Add</button>
+              <button onClick={addContact} className="add-btn" aria-label={`Add ${searchResult.username} to contacts`}>Add</button>
             </div>
           )}
-          {searchError && <div className="search-error">{searchError}</div>}
+          {searchError && <div className="search-error" role="alert">{searchError}</div>}
         </div>
 
-        <div className="conversations-list">
+        <div className="conversations-list" role="list" aria-label="Your contacts">
           {conversations.length === 0 && <p className="no-contacts">No contacts yet.</p>}
 
           {conversations.map((c) => (
@@ -1405,17 +1537,26 @@ function ChatInterface({ user, onLogout }) {
               key={c.customId}
               className={`contact-item ${currentChat?.customId === c.customId ? "selected" : ""}`}
               onClick={() => setCurrentChat(c)}
+              role="listitem"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setCurrentChat(c);
+                }
+              }}
+              aria-label={`Chat with ${c.username}${c.isOnline ? ' (online)' : ' (offline)'}${!c.hasKeys ? ' - keys not exchanged' : ''}`}
             >
               <div className="avatar-wrapper">
-                <div className="avatar">{c.username.charAt(0).toUpperCase()}</div>
-                {c.isOnline && <span className="online-dot"></span>}
-                {!c.hasKeys && <span className="no-key-indicator" title="Keys not exchanged">🔒</span>}
+                <div className="avatar" aria-hidden="true">{c.username.charAt(0).toUpperCase()}</div>
+                {c.isOnline && <span className="online-dot" aria-label="Online"></span>}
+                {!c.hasKeys && <span className="no-key-indicator" title="Keys not exchanged" aria-label="Keys not exchanged">🔒</span>}
               </div>
               <span className="contact-name">{c.username}</span>
             </div>
           ))}
         </div>
-      </div>
+      </aside>
 
       {/* CHAT AREA */}
       <div className="chat-box">
@@ -1432,9 +1573,19 @@ function ChatInterface({ user, onLogout }) {
         <audio ref={userAudio} autoPlay />
 
         {callAccepted && !callEnded ? (
-          <div className="active-call-bar">
-            <span>On Call with <b>{currentChat?.username || caller}</b></span>
-            <button className="end-call-btn" onClick={leaveCall}>End Call</button>
+          <div className="active-call-bar" role="status" aria-live="polite">
+            <div className="call-info">
+              <span>On Call with <b>{currentChat?.username || caller}</b></span>
+              {networkQuality && (
+                <span className="network-quality" title={formatNetworkQuality(networkQuality)}>
+                  {networkQuality.quality === NetworkQuality.EXCELLENT && '🟢 Excellent'}
+                  {networkQuality.quality === NetworkQuality.GOOD && '🟡 Good'}
+                  {networkQuality.quality === NetworkQuality.FAIR && '🟠 Fair'}
+                  {networkQuality.quality === NetworkQuality.POOR && '🔴 Poor'}
+                </span>
+              )}
+            </div>
+            <button className="end-call-btn" onClick={leaveCall} aria-label="End call">End Call</button>
           </div>
         ) : null}
 
@@ -1484,19 +1635,21 @@ function ChatInterface({ user, onLogout }) {
             </div>
 
             {currentChat.hasKeys ? (
-              <div className="chat-input-area">
+              <div className="chat-input-area" role="form" aria-label="Message input">
                 <input
                   type="file"
                   id="file-upload"
                   style={{ display: 'none' }}
                   onChange={handleFileUpload}
                   accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar"
+                  aria-label="Upload file"
                 />
                 <button
                   className="file-btn"
                   onClick={() => document.getElementById('file-upload').click()}
                   type="button"
                   title="Attach file"
+                  aria-label="Attach file"
                 >
                   📎
                 </button>
@@ -1507,21 +1660,23 @@ function ChatInterface({ user, onLogout }) {
                   value={newMessage}
                   onChange={handleTyping}
                   onKeyDown={(e) => e.key === 'Enter' && handleSubmit(e)}
+                  aria-label="Type your message"
                 />
 
                 <button
                   className={`mic-btn ${isRecording ? "recording" : ""}`}
                   onClick={isRecording ? stopRecording : startRecording}
                   type="button"
-                  title="Record audio"
+                  title={isRecording ? "Stop recording" : "Record audio"}
+                  aria-label={isRecording ? "Stop audio recording" : "Start audio recording"}
                 >
                   {isRecording ? "⬛" : "🎤"}
                 </button>
 
-                <button onClick={handleSubmit} className="send-btn">Send</button>
+                <button onClick={handleSubmit} className="send-btn" aria-label="Send message">Send</button>
               </div>
             ) : (
-              <div className="no-keys-warning">
+              <div className="no-keys-warning" role="alert">
                 🔒 Exchange encryption keys to start messaging
               </div>
             )}

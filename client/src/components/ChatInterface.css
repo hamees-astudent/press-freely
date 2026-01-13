@@ -902,3 +902,170 @@
         opacity: 1;
     }
 }
+
+/* Upload Progress Overlay */
+.upload-progress-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    backdrop-filter: blur(4px);
+}
+
+.upload-progress-card {
+    background: white;
+    padding: 30px;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    min-width: 300px;
+    text-align: center;
+}
+
+.upload-progress-card h4 {
+    margin-bottom: 15px;
+    color: #333;
+    font-size: 1.1rem;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background-color: #e0e0e0;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #007bff, #0056b3);
+    transition: width 0.3s ease;
+}
+
+/* Network Quality Indicator */
+.active-call-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    font-weight: 500;
+}
+
+.call-info {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.network-quality {
+    font-size: 0.85rem;
+    padding: 4px 12px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 12px;
+    backdrop-filter: blur(8px);
+}
+
+/* Keyboard Focus Indicators */
+button:focus-visible,
+input:focus-visible,
+.contact-item:focus-visible {
+    outline: 3px solid #007bff;
+    outline-offset: 2px;
+}
+
+.modal-overlay:focus-within {
+    outline: none;
+}
+
+/* Skip to Content Link (Hidden until focused) */
+.skip-link {
+    position: absolute;
+    top: -40px;
+    left: 0;
+    background: #007bff;
+    color: white;
+    padding: 8px;
+    text-decoration: none;
+    z-index: 100;
+}
+
+.skip-link:focus {
+    top: 0;
+}
+
+/* Improved Button States */
+button:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+button:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* High Contrast Mode Support */
+@media (prefers-contrast: high) {
+    .chat-container {
+        border: 2px solid currentColor;
+    }
+    
+    button {
+        border: 2px solid currentColor;
+    }
+}
+
+/* Reduced Motion Support */
+@media (prefers-reduced-motion: reduce) {
+    * {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* Dark Mode Support (Future Enhancement) */
+@media (prefers-color-scheme: dark) {
+    .chat-container {
+        background-color: #1a1a1a;
+    }
+    
+    .contact-list-panel {
+        background-color: #2d2d2d;
+        border-right-color: #444;
+    }
+    
+    .message-bubble {
+        background-color: #3d3d3d;
+        color: #fff;
+    }
+}
+
+/* Tooltips for Better Accessibility */
+[title] {
+    position: relative;
+}
+
+/* Screen Reader Only Text */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+}
