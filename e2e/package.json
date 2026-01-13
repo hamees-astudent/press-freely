@@ -1,0 +1,20 @@
+{
+  "name": "press-freely-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "End-to-end tests for Press Freely (separate Playwright project)",
+  "type": "commonjs",
+  "scripts": {
+    "install:browsers": "playwright install --with-deps",
+    "start:servers": "concurrently -k -s first -n server,client -c blue,green \"cross-env NODE_ENV=test PORT=5000 JWT_SECRET=press-freely-e2e-secret MONGO_URI=mongodb://127.0.0.1:27017/press-freely-e2e FRONTEND_URL=http://localhost:3000 SERVER_URL=http://localhost:5000 node ../server/server.js\" \"cross-env BROWSER=none PORT=3000 REACT_APP_API_URL=http://localhost:5000 REACT_APP_WS_URL=http://localhost:5000 npm --prefix ../client start\"",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.1",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3"
+  }
+}
