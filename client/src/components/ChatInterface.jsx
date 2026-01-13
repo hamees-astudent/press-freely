@@ -251,6 +251,9 @@ function ChatInterface({ user, onLogout }) {
   const [typingUser, setTypingUser] = useState(null);
   const [error, setError] = useState(null);
 
+  // Settings State
+  const [showSettings, setShowSettings] = useState(false);
+
   // Search State
   const [searchId, setSearchId] = useState("");
   const [searchResult, setSearchResult] = useState(null);
@@ -276,6 +279,7 @@ function ChatInterface({ user, onLogout }) {
   const myAudio = useRef();
   const userAudio = useRef();
   const connectionRef = useRef();
+  const typingTimeoutRef = useRef(null);
 
   const socket = useRef();
   const scrollRef = useRef();
@@ -1125,6 +1129,15 @@ function ChatInterface({ user, onLogout }) {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Cleanup typing timeout when chat changes or unmounts
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    };
+  }, [currentChat]);
+
   // --- Handlers ---
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -1209,6 +1222,9 @@ function ChatInterface({ user, onLogout }) {
       return;
     }
 
+    // Stop typing indicator when message is sent
+    socket.current.emit("typing", { receiverId: currentChat.customId, isTyping: false });
+
     try {
       const secret = await getSecretKey(currentChat.customId);
 
@@ -1234,6 +1250,30 @@ function ChatInterface({ user, onLogout }) {
     } catch (err) {
       console.error("Failed to send message:", err);
       alert("Failed to send message. Please try again.");
+    }
+  };
+
+  // Handle typing indicator
+  const handleTyping = (e) => {
+    setNewMessage(e.target.value);
+    
+    if (!currentChat || !socket.current) return;
+    
+    const isTyping = e.target.value.length > 0;
+    
+    // Send typing indicator
+    socket.current.emit("typing", { receiverId: currentChat.customId, isTyping });
+    
+    // Clear existing timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    
+    // Set timeout to stop typing indicator after 2 seconds of inactivity
+    if (isTyping) {
+      typingTimeoutRef.current = setTimeout(() => {
+        socket.current.emit("typing", { receiverId: currentChat.customId, isTyping: false });
+      }, 2000);
     }
   };
 
@@ -1297,6 +1337,29 @@ function ChatInterface({ user, onLogout }) {
         </div>
       )}
 
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h3>Settings</h3>
+            <div className="settings-section">
+              <h4>Encryption Keys</h4>
+              <p>Backup and restore your encryption keys to access encrypted messages on other devices.</p>
+              <div className="key-management">
+                <button onClick={exportKeys} className="key-btn">📥 Export Keys</button>
+                <label className="key-btn" style={{ cursor: 'pointer' }}>
+                  📤 Import Keys
+                  <input type="file" accept=".json" onChange={importKeys} style={{ display: 'none' }} />
+                </label>
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button onClick={() => setShowSettings(false)} className="accept-btn">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Status Message */}
       {keyExchangeStatus && (
         <div className="status-banner">{keyExchangeStatus}</div>
@@ -1307,13 +1370,7 @@ function ChatInterface({ user, onLogout }) {
         <h2 className="nav-logo">Press Freely</h2>
         <div className="nav-spacer"></div>
         <div className="my-id-display">My ID: <br /><strong>{user.customId}</strong></div>
-        <div className="key-management">
-          <button onClick={exportKeys} className="key-btn">📥 Export Keys</button>
-          <label className="key-btn" style={{ cursor: 'pointer' }}>
-            📤 Import Keys
-            <input type="file" accept=".json" onChange={importKeys} style={{ display: 'none' }} />
-          </label>
-        </div>
+        <button onClick={() => setShowSettings(true)} className="settings-btn">⚙️ Settings</button>
         <button onClick={onLogout} className="logout-btn">Logout</button>
       </div>
 
@@ -1415,6 +1472,15 @@ function ChatInterface({ user, onLogout }) {
                   </div>
                 </div>
               ))}
+              {typingUser === currentChat?.customId && (
+                <div className="typing-indicator">
+                  <div className="typing-bubble">
+                    <span className="typing-dot"></span>
+                    <span className="typing-dot"></span>
+                    <span className="typing-dot"></span>
+                  </div>
+                </div>
+              )}
             </div>
 
             {currentChat.hasKeys ? (
@@ -1439,7 +1505,7 @@ function ChatInterface({ user, onLogout }) {
                   type="text"
                   placeholder="Type a message..."
                   value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
+                  onChange={handleTyping}
                   onKeyDown={(e) => e.key === 'Enter' && handleSubmit(e)}
                 />
 

@@ -1,6 +1,5 @@
 import axios from "axios";
 import { useState } from "react";
-import { sanitizeUsername } from "../utils/sanitize";
 
 // API configuration
 const API_URL = process.env.REACT_APP_API_URL || "http://localhost:5000";
@@ -18,11 +17,10 @@ function Login({ onLogin }) {
         setIsLoading(true);
 
         try {
-            // Sanitize username
-            const sanitizedUsername = sanitizeUsername(username.trim());
+            const trimmedUsername = username.trim();
 
             // Input validation
-            if (sanitizedUsername.length < 3 || sanitizedUsername.length > 30) {
+            if (trimmedUsername.length < 3 || trimmedUsername.length > 30) {
                 throw new Error("Username must be between 3 and 30 characters");
             }
 
@@ -30,13 +28,13 @@ function Login({ onLogin }) {
                 throw new Error("Passphrase must be at least 8 characters");
             }
 
-            if (!/^[a-zA-Z0-9_-]+$/.test(sanitizedUsername)) {
+            if (!/^[a-zA-Z0-9_-]+$/.test(trimmedUsername)) {
                 throw new Error("Username can only contain letters, numbers, underscores and hyphens");
             }
 
             // Send to Server (no key generation during login)
             const res = await axios.post("/api/auth/login", {
-                username: sanitizedUsername,
+                username: trimmedUsername,
                 passphrase
             });
 

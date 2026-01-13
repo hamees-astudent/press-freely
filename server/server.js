@@ -4,11 +4,11 @@ const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
 const helmet = require("helmet");
-const rateLimit = require("express-rate-limit");
 const mongoSanitize = require("express-mongo-sanitize");
 const hpp = require("hpp");
 const socketHandler = require("./socketHandler");
 const path = require("path");
+const { apiLimiter, authLimiter, uploadLimiter } = require("./middleware/rateLimiter");
 require("dotenv").config();
 
 const app = express();
@@ -43,25 +43,10 @@ app.use(helmet({
     }
 }));
 
-// Rate limiting
-const limiter = rateLimit({
-    windowMs: 1 * 60 * 1000, // 1 minute
-    max: 100, // limit each IP to 100 requests per windowMs
-    message: "Too many requests from this IP, please try again later.",
-    standardHeaders: true,
-    legacyHeaders: false
-});
-
-const authLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000,
-    max: 60, // 60 login attempts per 1 minute
-    message: "Too many login attempts, please try again later.",
-    standardHeaders: true,
-    legacyHeaders: false
-});
-
-app.use("/api/", limiter);
+// Apply rate limiting middleware
+app.use("/api/", apiLimiter);
 app.use("/api/auth/", authLimiter);
+app.use("/api/upload/", uploadLimiter);
 
 // CORS Configuration
 const corsOptions = {

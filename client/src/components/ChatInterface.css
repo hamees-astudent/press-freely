@@ -818,3 +818,87 @@
 .message-wrapper.friend .decrypt-file-btn:hover {
     background-color: #e4e6eb;
 }
+
+/* Settings Button */
+.settings-btn {
+    background-color: rgba(255, 255, 255, 0.2);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    padding: 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+    width: 100%;
+    transition: background 0.2s;
+    margin-bottom: 10px;
+}
+
+.settings-btn:hover {
+    background-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Settings Section in Modal */
+.settings-section {
+    padding: 20px 0;
+    border-bottom: 1px solid #eee;
+}
+
+.settings-section:last-of-type {
+    border-bottom: none;
+}
+
+.settings-section h4 {
+    margin-bottom: 10px;
+    color: #333;
+    font-size: 1rem;
+}
+
+.settings-section p {
+    margin-bottom: 15px;
+    color: #666;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+/* Typing Indicator */
+.typing-indicator {
+    display: flex;
+    padding: 10px 20px;
+    margin-bottom: 10px;
+}
+
+.typing-bubble {
+    background-color: #e4e6eb;
+    border-radius: 18px;
+    padding: 12px 18px;
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.typing-dot {
+    width: 8px;
+    height: 8px;
+    background-color: #65676b;
+    border-radius: 50%;
+    animation: typing 1.4s infinite;
+}
+
+.typing-dot:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.typing-dot:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes typing {
+    0%, 60%, 100% {
+        transform: translateY(0);
+        opacity: 0.7;
+    }
+    30% {
+        transform: translateY(-10px);
+        opacity: 1;
+    }
+}

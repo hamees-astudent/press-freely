@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import axios from "axios";
 import ChatInterface from "./components/ChatInterface"; // Import the new component
 import Login from "./components/Login";
 
@@ -20,6 +21,8 @@ function App() {
   const handleLogout = () => {
     setUser(null);
     localStorage.removeItem("chatUser");
+    // Destroy access token
+    delete axios.defaults.headers.common['Authorization'];
   };
 
   return (
