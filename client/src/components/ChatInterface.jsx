@@ -866,7 +866,8 @@ function ChatInterface({ user, onLogout }) {
         headers: { "Content-Type": "multipart/form-data" },
         timeout: 120000,
         onUploadProgress: (progressEvent) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          const total = progressEvent.total || 1;
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / total);
           setUploadProgress({ status: 'uploading', progress: percentCompleted });
         }
       });
@@ -893,39 +894,8 @@ function ChatInterface({ user, onLogout }) {
 
       socket.current.emit("send_message", fileMsg);
       setMessages(prev => [...prev, fileMsg]);
-      
+
       setUploadProgress(null);
-      e.target.value = "";
-    } catch (err) {
-      console.error('Upload error:', err);
-      setUploadProgress(null);
-      alert(err.response?.data?.message || "Failed to upload file. Please try again.");
-      e.target.value = "";
-    }
-  };
-        senderId: user.customId,
-        receiverId: currentChat.customId,
-        text: "",
-        type: messageType,
-        fileUrl: res.data.fileUrl,
-        fileName: file.name,
-        createdAt: Date.now()
-      };
-
-      console.log(`Sending ${messageType} message:`, {
-        type: fileMsg.type,
-        fileUrl: fileMsg.fileUrl,
-        fileName: fileMsg.fileName
-      });
-
-      socket.current.emit("send_message", fileMsg);
-
-      // Add to local messages immediately
-      setMessages(prev => [...prev, fileMsg]);
-      
-      console.log(`${file.name} sent successfully!`);
-      
-      // Clear the file input
       e.target.value = "";
     } catch (err) {
       console.error("File upload error:", err);
@@ -1456,18 +1426,6 @@ function ChatInterface({ user, onLogout }) {
             </div>
             <div className="modal-actions">
               <button onClick={() => setShowSettings(false)} className="accept-btn" aria-label="Close settings">Close</button>
-            </div>
-          </div>
-        </div>
-      )}
-                <label className="key-btn" style={{ cursor: 'pointer' }}>
-                  📤 Import Keys
-                  <input type="file" accept=".json" onChange={importKeys} style={{ display: 'none' }} />
-                </label>
-              </div>
-            </div>
-            <div className="modal-actions">
-              <button onClick={() => setShowSettings(false)} className="accept-btn">Close</button>
             </div>
           </div>
         </div>
