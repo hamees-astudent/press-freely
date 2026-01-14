@@ -100,8 +100,8 @@ mongosh --version  # Should show v6.x.x or higher
 
 ```bash
 cd /path/to/your/workspace
-git clone <repository-url>
-cd DataCommunicationAndNetworkingII
+git clone https://github.com/hamees-astudent/press-freely
+cd press-freely
 ```
 
 ---
